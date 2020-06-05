@@ -233,7 +233,7 @@ TOK_DECL(TOK_FALSE,      -1, 0, NULL); /* false */
 TOK_DECL(TOK_RANGE,      -1, 0, NULL); /* range */
 TOK_DECL(TOK_FUNC,       -1, 0, NULL); /* func */
 TOK_DECL(TOK_CALL,       -1, 0, NULL); /* call */
-TOK_DECL(TOK_SET,        -1, 0, NULL); /* set */
+TOK_DECL(TOK_DEFINE,     -1, 0, NULL); /* define */
 
 TOK_DECL(TOK_IDENTIFIER, -1, 0, NULL); /* afasfasf */
 TOK_DECL(TOK_COMMA,      -1, 0, NULL); /* , */
@@ -245,6 +245,7 @@ TOK_DECL(TOK_LSQBR,      -1, 0, NULL); /* [ */
 TOK_DECL(TOK_RSQBR,      -1, 0, NULL); /* ] */
 TOK_DECL(TOK_EQ,         -1, 0, NULL); /* = */
 TOK_DECL(TOK_COLON,      -1, 0, NULL); /* : */
+TOK_DECL(TOK_SEMI,       -1, 0, NULL); /* ; */
 TOK_DECL(TOK_EOF,        -1, 0, NULL); /* EOF */
 
 struct tokeniser {
@@ -408,8 +409,8 @@ int tokeniser_next(struct tokeniser *p_tokeniser) {
 			p_tokeniser->cur.cls = &TOK_CALL;
 		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "func")) {
 			p_tokeniser->cur.cls = &TOK_FUNC;
-		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "set")) {
-			p_tokeniser->cur.cls = &TOK_SET;
+		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "define")) {
+			p_tokeniser->cur.cls = &TOK_DEFINE;
 		} else {
 			p_tokeniser->cur.cls = &TOK_IDENTIFIER;
 		}
@@ -432,6 +433,8 @@ int tokeniser_next(struct tokeniser *p_tokeniser) {
 		p_tokeniser->cur.cls = &TOK_COMMA;
 	} else if (c == ':') {
 		p_tokeniser->cur.cls = &TOK_COLON;
+	} else if (c == ';') {
+		p_tokeniser->cur.cls = &TOK_SEMI;
 	} else if (c == '%') {
 		p_tokeniser->cur.cls = &TOK_MOD;
 	} else if (c == '/') {
@@ -1277,7 +1280,7 @@ static int to_jnode(struct jnode *p_node, struct ast_node *p_ast, struct jnode_s
 
 int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser, struct ejson_error_handler *p_error_handler) {
 	struct ast_node *p_obj;
-	while (p_tokeniser->cur.cls == &TOK_SET) {
+	while (p_tokeniser->cur.cls == &TOK_DEFINE) {
 		const struct istring *p_key;
 		void **pp_obj;
 		if (tokeniser_next(p_tokeniser) || p_tokeniser->cur.cls != &TOK_IDENTIFIER)
@@ -1290,6 +1293,8 @@ int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace,
 			return ejson_error(p_error_handler, "expected '='\n");
 		if (tokeniser_next(p_tokeniser) || (p_obj = expect_expression(p_workspace, p_tokeniser)) == NULL)
 			return ejson_error(p_error_handler, "expected an expression\n");
+		if (p_tokeniser->cur.cls != &TOK_SEMI || tokeniser_next(p_tokeniser))
+			return ejson_error(p_error_handler, "expected ';'\n");
 		if (pdict_set(&(p_workspace->workspace), (uintptr_t)(p_key->cstr), p_obj))
 			return ejson_error(p_error_handler, "out of memory\n");
 	}
@@ -1497,6 +1502,16 @@ int main(int argc, char *argv[]) {
 		("call (func(y) call y []) [(func() 111)]"
 		,"111"
 		,"pass function as argument to function"
+		);
+	run_test
+		("define x = 11; define y = 7; x * y"
+		,"77"
+		,"use a workspace variable"
+		);
+	run_test
+		("define x = func(z) z*z; define y = 7; call x [y]"
+		,"49"
+		,"use a workspace variable as a function"
 		);
 
 	run_test("[]", "[]", "empty list");
