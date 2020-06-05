@@ -226,6 +226,15 @@ TOK_DECL(TOK_DIV,         2, 0, &AST_CLS_DIV); /* / */
 TOK_DECL(TOK_MOD,         2, 0, &AST_CLS_MOD); /* % */
 TOK_DECL(TOK_EXP,         3, 1, &AST_CLS_EXP); /* ^ */
 TOK_DECL(TOK_STRING,     -1, 0, NULL); /* "afasfasf" */
+TOK_DECL(TOK_NULL,       -1, 0, NULL); /* null */
+TOK_DECL(TOK_TRUE,       -1, 0, NULL); /* true */
+TOK_DECL(TOK_FALSE,      -1, 0, NULL); /* false */
+
+TOK_DECL(TOK_RANGE,      -1, 0, NULL); /* range */
+TOK_DECL(TOK_FUNC,       -1, 0, NULL); /* func */
+TOK_DECL(TOK_CALL,       -1, 0, NULL); /* call */
+TOK_DECL(TOK_SET,        -1, 0, NULL); /* set */
+
 TOK_DECL(TOK_IDENTIFIER, -1, 0, NULL); /* afasfasf */
 TOK_DECL(TOK_COMMA,      -1, 0, NULL); /* , */
 TOK_DECL(TOK_LBRACE,     -1, 0, NULL); /* { */
@@ -235,10 +244,8 @@ TOK_DECL(TOK_RPAREN,     -1, 0, NULL); /* ) */
 TOK_DECL(TOK_LSQBR,      -1, 0, NULL); /* [ */
 TOK_DECL(TOK_RSQBR,      -1, 0, NULL); /* ] */
 TOK_DECL(TOK_EQ,         -1, 0, NULL); /* = */
-TOK_DECL(TOK_ACCESS,     -1, 0, NULL); /* @ */
 TOK_DECL(TOK_COLON,      -1, 0, NULL); /* : */
 TOK_DECL(TOK_EOF,        -1, 0, NULL); /* EOF */
-
 
 struct tokeniser {
 	unsigned      lp; /* line position, character position */
@@ -376,7 +383,6 @@ int tokeniser_next(struct tokeniser *p_tokeniser) {
 	    ||  (c >= 'A' && c <= 'Z')
 	    ) {
 		char nc = *(p_tokeniser->buf);
-		p_tokeniser->cur.cls = &TOK_IDENTIFIER;
 		p_tokeniser->cur.t.strident.str[0] = c;
 		p_tokeniser->cur.t.strident.len = 1;
 		while
@@ -389,6 +395,25 @@ int tokeniser_next(struct tokeniser *p_tokeniser) {
 			nc = *(++p_tokeniser->buf);
 		}
 		p_tokeniser->cur.t.strident.str[p_tokeniser->cur.t.strident.len] = '\0';
+
+		if (!strcmp(p_tokeniser->cur.t.strident.str, "true")) {
+			p_tokeniser->cur.cls = &TOK_TRUE;
+		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "false")) {
+			p_tokeniser->cur.cls = &TOK_FALSE;
+		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "null")) {
+			p_tokeniser->cur.cls = &TOK_NULL;
+		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "range")) {
+			p_tokeniser->cur.cls = &TOK_RANGE;
+		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "call")) {
+			p_tokeniser->cur.cls = &TOK_CALL;
+		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "func")) {
+			p_tokeniser->cur.cls = &TOK_FUNC;
+		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "set")) {
+			p_tokeniser->cur.cls = &TOK_SET;
+		} else {
+			p_tokeniser->cur.cls = &TOK_IDENTIFIER;
+		}
+
 	} else if (c == '=') {
 		p_tokeniser->cur.cls = &TOK_EQ;
 	} else if (c == '[') {
@@ -407,8 +432,6 @@ int tokeniser_next(struct tokeniser *p_tokeniser) {
 		p_tokeniser->cur.cls = &TOK_COMMA;
 	} else if (c == ':') {
 		p_tokeniser->cur.cls = &TOK_COLON;
-	} else if (c == '@') {
-		p_tokeniser->cur.cls = &TOK_ACCESS;
 	} else if (c == '%') {
 		p_tokeniser->cur.cls = &TOK_MOD;
 	} else if (c == '/') {
@@ -463,13 +486,9 @@ struct ast_node *parse_primary(struct evaluation_context *p_workspace, struct to
 	struct ast_node *p_temp_nodes[8192];
 	struct ast_node *p_ret = NULL;
 
-	if (p_tokeniser->cur.cls == &TOK_ACCESS) {
+	if (p_tokeniser->cur.cls == &TOK_IDENTIFIER) {
 		const struct istring *k;
 		void **node;
-		if (tokeniser_next(p_tokeniser)) {
-			fprintf(stderr, "expected identifier\n");
-			return NULL;
-		}
 		k = istrings_add(&(p_workspace->strings), p_tokeniser->cur.t.strident.str);
 		if (k == NULL) {
 			fprintf(stderr, "oom\n");
@@ -481,23 +500,7 @@ struct ast_node *parse_primary(struct evaluation_context *p_workspace, struct to
 			return NULL;
 		}
 		p_ret = *node;
-#if 0
-		if (p_ret->cls == &AST_CLS_STACKREF) {
-			long long ref = p_ret->d.i;
-			p_ret         = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
-			p_ret->cls    = &AST_CLS_STACKREF;
-			p_ret->d.i    = ref;
-		}
-		 else if (p_ret->cls == AST_CLS_FUNCTION) {
-			unsigned         nb_args = p_ret->d.fn.nb_args;;
-			struct ast_node *p_node  = p_ret->d.fn.node;
-			p_ret               = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
-			p_ret->rtype        = AST_RTYPE_UNKNOWN;
-			p_ret->cls          = AST_CLS_NAMED_FUNCTION;
-			p_ret->d.fn.nb_args = nb_args;
-			p_ret->d.fn.node    = p_node;
-		}
-#endif
+
 		if (tokeniser_next(p_tokeniser))
 			return NULL;
 	} else if (p_tokeniser->cur.cls == &TOK_INT) {
@@ -636,216 +639,216 @@ struct ast_node *parse_primary(struct evaluation_context *p_workspace, struct to
 		p_ret->cls           = &AST_CLS_NEG;
 		p_ret->d.binop.p_lhs = p_next;
 		p_ret->d.binop.p_rhs = NULL;
-	} else if (p_tokeniser->cur.cls == &TOK_IDENTIFIER) {
-		int istrue = !strcmp(p_tokeniser->cur.t.strident.str, "true");
-		if (istrue || !strcmp(p_tokeniser->cur.t.strident.str, "false")) {
-			p_ret        = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
-			p_ret->cls   = &AST_CLS_LITERAL_BOOL;
-			p_ret->d.i   = istrue;
-			if (tokeniser_next(p_tokeniser))
-				return NULL;
-		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "null")) {
-			p_ret        = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
-			p_ret->cls   = &AST_CLS_LITERAL_NULL;
-			if (tokeniser_next(p_tokeniser))
-				return NULL;
-		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "range")) {
-			uint_fast32_t nb_list = 0;
-			p_ret        = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
-			p_ret->cls   = &AST_CLS_LITERAL_NULL;
-			if (tokeniser_next(p_tokeniser))
-				return NULL;
-			if (p_tokeniser->cur.cls != &TOK_LPAREN) {
-				fprintf(stderr, "expected lparen\n");
-				return NULL;
-			}
-			if (tokeniser_next(p_tokeniser)) {
-				fprintf(stderr, "expected another token\n");
-				return NULL;
-			}
-			if (p_tokeniser->cur.cls != &TOK_RPAREN) {
-				do {
-					p_temp_nodes[nb_list] = expect_expression(p_workspace, p_tokeniser);
-					if (p_temp_nodes[nb_list] == NULL)
-						return NULL;
-					nb_list++;
-					if (p_tokeniser->cur.cls == &TOK_RPAREN)
-						break;
-					if (p_tokeniser->cur.cls != &TOK_COMMA) {
-						fprintf(stderr, "expected , or ]\n");
-						return NULL;
-					}
-					if (tokeniser_next(p_tokeniser)) {
-						fprintf(stderr, "expected another token\n");
-						return NULL;
-					}
-				} while (1);
-			}
-			if (nb_list < 1 || nb_list > 3) {
-				fprintf(stderr, "range expects 1-3 arguments\n");
-				return NULL;
-			}
-			p_ret                    = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
-			p_ret->cls               = &AST_CLS_RANGE;
-			p_ret->d.builtin.nb_args = nb_list;
-			if (nb_list) {
-				p_ret->d.builtin.pp_args = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node *) * nb_list);
-				memcpy(p_ret->d.builtin.pp_args, p_temp_nodes, sizeof(struct ast_node *) * nb_list);
-			} else {
-				p_ret->d.builtin.pp_args = NULL;
-			}
-			if (tokeniser_next(p_tokeniser))
-				return NULL;
-		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "func")) {
-			unsigned        nb_args = 0;
-			unsigned i;
-			struct ast_node args[32];
-			uintptr_t       argnames[32];
-
-			if (tokeniser_next(p_tokeniser)) {
-				fprintf(stderr, "expected another token after func\n");
-				return NULL;
-			}
-			if (p_tokeniser->cur.cls != &TOK_LPAREN) {
-				fprintf(stderr, "expected (\n");
-				return NULL;
-			}
-			if (tokeniser_next(p_tokeniser)) {
-				fprintf(stderr, "expected another token after (\n");
-				return NULL;
-			}
-			if (p_tokeniser->cur.cls != &TOK_RPAREN) {
-				do {
-					const struct istring *k;
-					void **node;
-					if (p_tokeniser->cur.cls != &TOK_IDENTIFIER) {
-						fprintf(stderr, "function parameter names must be identifiers %s\n", p_tokeniser->cur.cls->name);
-						return NULL;
-					}
-					k = istrings_add(&(p_workspace->strings), p_tokeniser->cur.t.strident.str);
-					if (k == NULL) {
-						fprintf(stderr, "oom\n");
-						return NULL;
-					}
-					if (tokeniser_next(p_tokeniser)) {
-						fprintf(stderr, "expected another token\n");
-						return NULL;
-					}
-					if (p_tokeniser->cur.cls != &TOK_COMMA && p_tokeniser->cur.cls != &TOK_RPAREN) {
-						fprintf(stderr, "expected , or )\n");
-						return NULL;
-					}
-
-					argnames[nb_args] = (uintptr_t)(k->cstr);
-					node = pdict_get(&(p_workspace->workspace), argnames[nb_args]);
-					if (node != NULL) {
-						fprintf(stderr, "function parameter names may only appear ones and must alias workspace variables (%s)\n", k->cstr);
-						return NULL;
-					}
-					args[nb_args].cls = &AST_CLS_STACKREF;
-					args[nb_args].d.i = p_workspace->stack_depth + nb_args + 1;
-					if (pdict_set(&(p_workspace->workspace), argnames[nb_args], &(args[nb_args]))) {
-						fprintf(stderr, "oom\n");
-						return NULL;
-					}
-					nb_args++;
-
-					if (p_tokeniser->cur.cls == &TOK_RPAREN)
-						break;
-
-					if (tokeniser_next(p_tokeniser)) {
-						fprintf(stderr, "expected another token\n");
-						return NULL;
-					}
-				} while (1);
-			}
-			if (tokeniser_next(p_tokeniser)) {
-				fprintf(stderr, "expected another token after )\n");
-				return NULL;
-			}
-
-			p_workspace->stack_depth += nb_args;
-
-			p_ret               = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
-			p_ret->cls          = &AST_CLS_FUNCTION;
-			p_ret->d.fn.nb_args = nb_args;
-			p_ret->d.fn.node    = expect_expression(p_workspace, p_tokeniser);
-			p_workspace->stack_depth -= nb_args;
-
-			for (i = 0; i < nb_args; i++) {
-				if (pdict_delete(&(p_workspace->workspace), argnames[i])) {
-					fprintf(stderr, "ICE\n");
-					abort();
-				}
-			}
-
-			if (p_ret->d.fn.node == NULL) {
-				fprintf(stderr, "expected expression for function body\n");
-				return NULL;
-			}
-
-
-		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "call")) {
-			unsigned i;
-			unsigned nb_args = 0;
-
-			if (tokeniser_next(p_tokeniser)) {
-				fprintf(stderr, "expected identifier\n");
-				return NULL;
-			}
-			p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
-			p_ret->cls        = &AST_CLS_CALL;
-			p_ret->d.call.fn  = expect_expression(p_workspace, p_tokeniser);
-			if (p_ret->d.call.fn == NULL) {
-				fprintf(stderr, "expected function expression\n");
-				return NULL;
-			}
-			if (p_tokeniser->cur.cls != &TOK_LSQBR) {
-				fprintf(stderr, "expected [\n");
-				return NULL;
-			}
-			if (tokeniser_next(p_tokeniser)) {
-				fprintf(stderr, "expected identifier\n");
-				return NULL;
-			}
-
-			if (p_tokeniser->cur.cls != &TOK_RSQBR) {
-				do {
-					p_temp_nodes[nb_args] = expect_expression(p_workspace, p_tokeniser);
-					if (p_temp_nodes[nb_args] == NULL)
-						return NULL;
-					nb_args++;
-					if (p_tokeniser->cur.cls == &TOK_RSQBR)
-						break;
-					if (p_tokeniser->cur.cls != &TOK_COMMA) {
-						fprintf(stderr, "expected , or ]\n");
-						return NULL;
-					}
-					if (tokeniser_next(p_tokeniser)) {
-						fprintf(stderr, "expected another token\n");
-						return NULL;
-					}
-				} while (1);
-			}
-
-			if (tokeniser_next(p_tokeniser)) {
-				fprintf(stderr, "expected identifier\n");
-				return NULL;
-			}
-
-			if (nb_args) {
-				if ((p_ret->d.call.pp_args = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node *) * nb_args)) == NULL)
-					return NULL;
-				for (i = 0; i < nb_args; i++) {
-					p_ret->d.call.pp_args[i] = p_temp_nodes[i];
-				}
-			}
-
-			p_ret->d.call.nb_args = nb_args;
-		} else {
-			fprintf(stderr, "invalid literal '%s'\n", p_tokeniser->cur.t.strident.str);
+	} else if (p_tokeniser->cur.cls == &TOK_NULL) {
+		p_ret        = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
+		p_ret->cls   = &AST_CLS_LITERAL_NULL;
+		if (tokeniser_next(p_tokeniser))
+			return NULL;
+	} else if (p_tokeniser->cur.cls == &TOK_TRUE) {
+		p_ret      = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
+		p_ret->cls = &AST_CLS_LITERAL_BOOL;
+		p_ret->d.i = 1;
+		if (tokeniser_next(p_tokeniser))
+			return NULL;
+	} else if (p_tokeniser->cur.cls == &TOK_FALSE) {
+		p_ret      = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
+		p_ret->cls = &AST_CLS_LITERAL_BOOL;
+		p_ret->d.i = 0;
+		if (tokeniser_next(p_tokeniser))
+			return NULL;
+	} else if (p_tokeniser->cur.cls == &TOK_RANGE) {
+		uint_fast32_t nb_list = 0;
+		p_ret        = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
+		p_ret->cls   = &AST_CLS_LITERAL_NULL;
+		if (tokeniser_next(p_tokeniser))
+			return NULL;
+		if (p_tokeniser->cur.cls != &TOK_LPAREN) {
+			fprintf(stderr, "expected lparen\n");
 			return NULL;
 		}
+		if (tokeniser_next(p_tokeniser)) {
+			fprintf(stderr, "expected another token\n");
+			return NULL;
+		}
+		if (p_tokeniser->cur.cls != &TOK_RPAREN) {
+			do {
+				p_temp_nodes[nb_list] = expect_expression(p_workspace, p_tokeniser);
+				if (p_temp_nodes[nb_list] == NULL)
+					return NULL;
+				nb_list++;
+				if (p_tokeniser->cur.cls == &TOK_RPAREN)
+					break;
+				if (p_tokeniser->cur.cls != &TOK_COMMA) {
+					fprintf(stderr, "expected , or ]\n");
+					return NULL;
+				}
+				if (tokeniser_next(p_tokeniser)) {
+					fprintf(stderr, "expected another token\n");
+					return NULL;
+				}
+			} while (1);
+		}
+		if (nb_list < 1 || nb_list > 3) {
+			fprintf(stderr, "range expects 1-3 arguments\n");
+			return NULL;
+		}
+		p_ret                    = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
+		p_ret->cls               = &AST_CLS_RANGE;
+		p_ret->d.builtin.nb_args = nb_list;
+		if (nb_list) {
+			p_ret->d.builtin.pp_args = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node *) * nb_list);
+			memcpy(p_ret->d.builtin.pp_args, p_temp_nodes, sizeof(struct ast_node *) * nb_list);
+		} else {
+			p_ret->d.builtin.pp_args = NULL;
+		}
+		if (tokeniser_next(p_tokeniser))
+			return NULL;
+	} else if (p_tokeniser->cur.cls == &TOK_FUNC) {
+		unsigned        nb_args = 0;
+		unsigned        i;
+		struct ast_node args[32];
+		uintptr_t       argnames[32];
+
+		if (tokeniser_next(p_tokeniser)) {
+			fprintf(stderr, "expected another token after func\n");
+			return NULL;
+		}
+		if (p_tokeniser->cur.cls != &TOK_LPAREN) {
+			fprintf(stderr, "expected (\n");
+			return NULL;
+		}
+		if (tokeniser_next(p_tokeniser)) {
+			fprintf(stderr, "expected another token after (\n");
+			return NULL;
+		}
+		if (p_tokeniser->cur.cls != &TOK_RPAREN) {
+			do {
+				const struct istring *k;
+				void **node;
+				if (p_tokeniser->cur.cls != &TOK_IDENTIFIER) {
+					fprintf(stderr, "function parameter names must be identifiers %s\n", p_tokeniser->cur.cls->name);
+					return NULL;
+				}
+				k = istrings_add(&(p_workspace->strings), p_tokeniser->cur.t.strident.str);
+				if (k == NULL) {
+					fprintf(stderr, "oom\n");
+					return NULL;
+				}
+				if (tokeniser_next(p_tokeniser)) {
+					fprintf(stderr, "expected another token\n");
+					return NULL;
+				}
+				if (p_tokeniser->cur.cls != &TOK_COMMA && p_tokeniser->cur.cls != &TOK_RPAREN) {
+					fprintf(stderr, "expected , or )\n");
+					return NULL;
+				}
+
+				argnames[nb_args] = (uintptr_t)(k->cstr);
+				node = pdict_get(&(p_workspace->workspace), argnames[nb_args]);
+				if (node != NULL) {
+					fprintf(stderr, "function parameter names may only appear ones and must alias workspace variables (%s)\n", k->cstr);
+					return NULL;
+				}
+				args[nb_args].cls = &AST_CLS_STACKREF;
+				args[nb_args].d.i = p_workspace->stack_depth + nb_args + 1;
+				if (pdict_set(&(p_workspace->workspace), argnames[nb_args], &(args[nb_args]))) {
+					fprintf(stderr, "oom\n");
+					return NULL;
+				}
+				nb_args++;
+
+				if (p_tokeniser->cur.cls == &TOK_RPAREN)
+					break;
+
+				if (tokeniser_next(p_tokeniser)) {
+					fprintf(stderr, "expected another token\n");
+					return NULL;
+				}
+			} while (1);
+		}
+		if (tokeniser_next(p_tokeniser)) {
+			fprintf(stderr, "expected another token after )\n");
+			return NULL;
+		}
+
+		p_workspace->stack_depth += nb_args;
+
+		p_ret               = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
+		p_ret->cls          = &AST_CLS_FUNCTION;
+		p_ret->d.fn.nb_args = nb_args;
+		p_ret->d.fn.node    = expect_expression(p_workspace, p_tokeniser);
+		p_workspace->stack_depth -= nb_args;
+
+		for (i = 0; i < nb_args; i++) {
+			if (pdict_delete(&(p_workspace->workspace), argnames[i])) {
+				fprintf(stderr, "ICE\n");
+				abort();
+			}
+		}
+
+		if (p_ret->d.fn.node == NULL) {
+			fprintf(stderr, "expected expression for function body\n");
+			return NULL;
+		}
+
+
+	} else if (p_tokeniser->cur.cls == &TOK_CALL) {
+		unsigned i;
+		unsigned nb_args = 0;
+
+		if (tokeniser_next(p_tokeniser)) {
+			fprintf(stderr, "expected identifier\n");
+			return NULL;
+		}
+		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
+		p_ret->cls        = &AST_CLS_CALL;
+		p_ret->d.call.fn  = expect_expression(p_workspace, p_tokeniser);
+		if (p_ret->d.call.fn == NULL) {
+			fprintf(stderr, "expected function expression\n");
+			return NULL;
+		}
+		if (p_tokeniser->cur.cls != &TOK_LSQBR) {
+			fprintf(stderr, "expected [\n");
+			return NULL;
+		}
+		if (tokeniser_next(p_tokeniser)) {
+			fprintf(stderr, "expected identifier\n");
+			return NULL;
+		}
+
+		if (p_tokeniser->cur.cls != &TOK_RSQBR) {
+			do {
+				p_temp_nodes[nb_args] = expect_expression(p_workspace, p_tokeniser);
+				if (p_temp_nodes[nb_args] == NULL)
+					return NULL;
+				nb_args++;
+				if (p_tokeniser->cur.cls == &TOK_RSQBR)
+					break;
+				if (p_tokeniser->cur.cls != &TOK_COMMA) {
+					fprintf(stderr, "expected , or ]\n");
+					return NULL;
+				}
+				if (tokeniser_next(p_tokeniser)) {
+					fprintf(stderr, "expected another token\n");
+					return NULL;
+				}
+			} while (1);
+		}
+
+		if (tokeniser_next(p_tokeniser)) {
+			fprintf(stderr, "expected identifier\n");
+			return NULL;
+		}
+
+		if (nb_args) {
+			if ((p_ret->d.call.pp_args = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node *) * nb_args)) == NULL)
+				return NULL;
+			for (i = 0; i < nb_args; i++) {
+				p_ret->d.call.pp_args[i] = p_temp_nodes[i];
+			}
+		}
+
+		p_ret->d.call.nb_args = nb_args;
 	} else {
 		token_print(&(p_tokeniser->cur));
 		abort();
@@ -1274,7 +1277,7 @@ static int to_jnode(struct jnode *p_node, struct ast_node *p_ast, struct jnode_s
 
 int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser, struct ejson_error_handler *p_error_handler) {
 	struct ast_node *p_obj;
-	while (p_tokeniser->cur.cls == &TOK_ACCESS) {
+	while (p_tokeniser->cur.cls == &TOK_SET) {
 		const struct istring *p_key;
 		void **pp_obj;
 		if (tokeniser_next(p_tokeniser) || p_tokeniser->cur.cls != &TOK_IDENTIFIER)
@@ -1476,22 +1479,22 @@ int main(int argc, char *argv[]) {
 		,"function call with no argument"
 		);
 	run_test
-		("call (func(x) @x) [55]"
+		("call (func(x) x) [55]"
 		,"55"
 		,"function call that returns the argument"
 		);
 	run_test
-		("call (func(x, y, z) @x * @y + @z) [3, 5, 7]"
+		("call (func(x, y, z) x * y + z) [3, 5, 7]"
 		,"22"
 		,"function mac-like function"
 		);
 	run_test
-		("call (func(x, y) call (func(z) @x - @y * @z) [3]) [5, 7]"
+		("call (func(x, y) call (func(z) x - y * z) [3]) [5, 7]"
 		,"-32"
 		,"test that accesses arguments from outer function call"
 		);
 	run_test
-		("call (func(y) call @y []) [(func() 111)]"
+		("call (func(y) call y []) [(func() 111)]"
 		,"111"
 		,"pass function as argument to function"
 		);
