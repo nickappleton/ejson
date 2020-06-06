@@ -1579,34 +1579,38 @@ int main(int argc, char *argv[]) {
 		,"range generator from-step-to 2"
 		);
 	run_test
-		("call (func() 1) []"
+		("call func() 1 []"
 		,"1"
-		,"function call with no argument"
+		,"calling a function that takes no arguments and returns 1"
 		);
 	run_test
-		("call (func(x) x) [55]"
+		("call func(x) x [55]"
 		,"55"
-		,"function call that returns the argument"
+		,"calling a function that takes one argument and returns its value"
 		);
 	run_test
-		("call (func(x) [x]) [55]"
+		("call func(x) [x] [55]"
 		,"[55]"
-		,"function call that returns the argument in a list"
+		,"calling a function that takes one argument and returns its value "
+		 "in a list"
 		);
 	run_test
-		("call (func(x, y, z) x * y + z) [3, 5, 7]"
+		("call func(x, y, z) x * y + z [3, 5, 7]"
 		,"22"
-		,"function mac-like function"
+		,"calling a function that multiplies the first two arguments and "
+		 "adds the third (test order of arguments on stack)"
 		);
 	run_test
-		("call (func(x, y) call (func(z) x - y * z) [3]) [5, 7]"
+		("call func(x, y) call func(z) x - y * z [3] [5, 7]"
 		,"-32"
-		,"test that accesses arguments from outer function call"
+		,"calling a function that contains another function (nested stack "
+		 "access test)"
 		);
 	run_test
-		("call (func(y) call y []) [(func() 111)]"
+		("call func(y) call y [] [func() 111]"
 		,"111"
-		,"pass function as argument to function"
+		,"calling a function that calls the given function passed as an "
+		 "argument"
 		);
 	run_test
 		("define x = 11; define y = 7; x * y"
@@ -1621,17 +1625,23 @@ int main(int argc, char *argv[]) {
 	run_test
 		("listval [1,2,3] 1"
 		,"2"
-		,"listval list extraction"
+		,"extraction of a value from a literal list"
 		);
 	run_test
 		("listval range(10) 4"
 		,"4"
-		,"list extraction from a range"
+		,"extracting an element of a generated list"
 		);
 	run_test
-		("listval (call (func(x) [1, x, 2, 3]) [50]) 1"
+		("call func(x) [1, x, 2, 3] [50]"
+		,"[1, 50, 2, 3]"
+		,"a function that returns a 4 element list with the second element "
+		 "equal to the argument"
+		);
+	run_test
+		("listval call func(x) [1, x, 2, 3] [50] 1"
 		,"50"
-		,"use a workspace variable as a function"
+		,"extracting an element of the list returned by a function"
 		);
 
 	run_test("[]", "[]", "empty list");
