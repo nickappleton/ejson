@@ -69,6 +69,10 @@ struct ast_node {
 					long long first;
 					long long step;
 				} range;
+				struct {
+					struct ev_ast_node *p_function;
+					struct ev_ast_node *p_key;
+				} map;
 			} d;
 			uint_fast32_t     nb_elements;
 		} lgen; /* AST_CLS_LIST_GENERATOR */
@@ -76,6 +80,10 @@ struct ast_node {
 			struct ast_node **elements; /* 2*nb_keys - [key, value] */
 			uint_fast32_t     nb_keys;
 		} ldict; /* AST_CLS_LITERAL_DICT */
+		struct {
+			struct ast_node  *p_function;
+			struct ast_node  *p_list;
+		} lmap;
 		struct {
 			struct ast_node *node;
 			unsigned         nb_args;
@@ -196,7 +204,9 @@ static void debug_print_listval(const struct ast_node *p_node, FILE *p_f, unsign
 	p_node->d.listval.p_index->cls->debug_print(p_node->d.listval.p_index, p_f, depth + 1);
 }
 static void debug_print_map(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
-	abort();
+	fprintf(p_f, "%*s%s\n", depth, "", p_node->cls->p_name);
+	p_node->d.map.p_function->cls->debug_print(p_node->d.map.p_function, p_f, depth + 1);
+	p_node->d.map.p_input_list->cls->debug_print(p_node->d.map.p_input_list, p_f, depth + 1);
 }
 
 static void debug_list_generator(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
@@ -222,6 +232,7 @@ DEF_AST_CLS(AST_CLS_RANGE,           NULL, debug_print_builtin);
 DEF_AST_CLS(AST_CLS_FUNCTION,        NULL, debug_print_function);
 DEF_AST_CLS(AST_CLS_CALL,            NULL, debug_print_call);
 DEF_AST_CLS(AST_CLS_LISTVAL,         NULL, debug_print_listval);
+DEF_AST_CLS(AST_CLS_MAP,             NULL, debug_print_map);
 //DEF_AST_CLS(AST_CLS_CALL,            NULL, debug_print_call);
 DEF_AST_CLS(AST_CLS_STACKREF,        NULL, debug_print_int_like);
 DEF_AST_CLS(AST_CLS_LIST_GENERATOR,  NULL, debug_list_generator);
@@ -253,6 +264,7 @@ TOK_DECL(TOK_FUNC,       -1, 0, NULL); /* func */
 TOK_DECL(TOK_CALL,       -1, 0, NULL); /* call */
 TOK_DECL(TOK_DEFINE,     -1, 0, NULL); /* define */
 TOK_DECL(TOK_LISTVAL,    -1, 0, NULL); /* listval */
+TOK_DECL(TOK_MAP,        -1, 0, NULL); /* map */
 
 TOK_DECL(TOK_IDENTIFIER, -1, 0, NULL); /* afasfasf */
 TOK_DECL(TOK_COMMA,      -1, 0, NULL); /* , */
@@ -432,6 +444,8 @@ int tokeniser_next(struct tokeniser *p_tokeniser) {
 			p_tokeniser->cur.cls = &TOK_DEFINE;
 		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "listval")) {
 			p_tokeniser->cur.cls = &TOK_LISTVAL;
+		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "map")) {
+			p_tokeniser->cur.cls = &TOK_MAP;
 		} else {
 			p_tokeniser->cur.cls = &TOK_IDENTIFIER;
 		}
@@ -535,6 +549,15 @@ struct ast_node *parse_primary(struct evaluation_context *p_workspace, struct to
 		if ((p_ret->d.listval.p_list = expect_expression(p_workspace, p_tokeniser)) == NULL)
 			return NULL;
 		if ((p_ret->d.listval.p_index = expect_expression(p_workspace, p_tokeniser)) == NULL)
+			return NULL;
+	} else if (p_tokeniser->cur.cls == &TOK_MAP) {
+		if (tokeniser_next(p_tokeniser))
+			return NULL;
+		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
+		p_ret->cls        = &AST_CLS_MAP;
+		if ((p_ret->d.map.p_function = expect_expression(p_workspace, p_tokeniser)) == NULL)
+			return NULL;
+		if ((p_ret->d.map.p_input_list = expect_expression(p_workspace, p_tokeniser)) == NULL)
 			return NULL;
 	} else if (p_tokeniser->cur.cls == &TOK_INT) {
 		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
@@ -1010,6 +1033,54 @@ int ast_list_generator_get_element(struct ev_ast_node *p_dest, const struct ev_a
 	return 0;
 }
 
+
+int ast_list_generator_map(struct ev_ast_node *p_dest, const struct ev_ast_node *p_src, unsigned element, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler) {
+	struct ev_ast_node argument, tmp;
+	struct ev_ast_node **pp_tmp;
+	struct ev_ast_node *p_tmp;
+
+	const struct ev_ast_node *p_function;
+	const struct ev_ast_node *p_list;
+
+	assert(p_src->data.cls == &AST_CLS_LIST_GENERATOR);
+	p_function = p_src->data.d.lgen.d.map.p_function;
+	p_list     = p_src->data.d.lgen.d.map.p_key;
+	assert(p_function->data.cls == &AST_CLS_FUNCTION);
+	assert(p_list->data.cls == &AST_CLS_LIST_GENERATOR || p_list->data.cls == &AST_CLS_LITERAL_LIST);
+
+	if (p_list->data.cls == &AST_CLS_LITERAL_LIST) {
+		if (element >= p_list->data.d.llist.nb_elements)
+			return ejson_error(p_error_handler, "list index out of range\n");
+		tmp      = *p_list;
+		tmp.data = *(p_list->data.d.llist.elements[element]);
+		if (evaluate_ast(&argument, &tmp, p_alloc, p_error_handler))
+			return ejson_error(p_error_handler, "could not get list item\n");
+	} else {
+		if (element >= p_list->data.d.lgen.nb_elements)
+			return ejson_error(p_error_handler, "list index out of range\n");
+		if (p_list->data.d.lgen.get_element(&argument, p_list, element, p_alloc, p_error_handler))
+			return ejson_error(p_error_handler, "could not get list item\n");
+	}
+
+	if ((pp_tmp = linear_allocator_alloc(p_alloc, sizeof(struct ev_ast_node *) * (p_function->stack_size + 1))) == NULL)
+		return ejson_error(p_error_handler, "oom\n");
+	if (p_function->stack_size)
+		memcpy(pp_tmp, p_function->pp_stack, p_function->stack_size * sizeof(struct ev_ast_node *));
+	if ((p_tmp = linear_allocator_alloc(p_alloc, sizeof(struct ev_ast_node))) == NULL)
+		return ejson_error(p_error_handler, "oom\n");
+	*p_tmp = argument;
+	pp_tmp[p_function->stack_size] = p_tmp;
+
+	tmp.pp_stack   = pp_tmp;
+	tmp.stack_size = p_function->stack_size + 1;
+	tmp.data       = *(p_function->data.d.fn.node);
+
+	if (evaluate_ast(p_dest, &tmp, p_alloc, p_error_handler))
+		return ejson_error(p_error_handler, "could not evaluate function\n");
+
+	return 0;
+}
+
 /* Evaluate to the point where we have a node that can be used as a JSON
  * element.
  * 
@@ -1222,8 +1293,33 @@ int evaluate_ast(struct ev_ast_node *p_result, const struct ev_ast_node *p_src, 
 		return 0;
 	}
 
+	if (p_src->data.cls == &AST_CLS_MAP) {
+		struct ev_ast_node function, list, tmp;
+
+		tmp.data = *(p_src->data.d.map.p_function);
+		if (evaluate_ast(&function, &tmp, p_alloc, p_error_handler) || function.data.cls != &AST_CLS_FUNCTION || function.data.d.fn.nb_args != 1)
+			return ejson_error(p_error_handler, "map expects a function argument that takes one argument\n");
+
+		tmp.data = *(p_src->data.d.map.p_input_list);
+		if (evaluate_ast(&list, &tmp, p_alloc, p_error_handler) || (list.data.cls != &AST_CLS_LITERAL_LIST && list.data.cls != &AST_CLS_LIST_GENERATOR))
+			return ejson_error(p_error_handler, "map expected a list argument following the function\n");
+
+		p_result->pp_stack                        = p_src->pp_stack;
+		p_result->stack_size                      = p_src->stack_size;
+		p_result->data.cls                        = &AST_CLS_LIST_GENERATOR;
+		p_result->data.d.lgen.d.map.p_function    = linear_allocator_alloc(p_alloc, sizeof(struct ev_ast_node));
+		p_result->data.d.lgen.d.map.p_key         = linear_allocator_alloc(p_alloc, sizeof(struct ev_ast_node));
+		p_result->data.d.lgen.d.map.p_function[0] = function;
+		p_result->data.d.lgen.d.map.p_key[0]      = list;
+		p_result->data.d.lgen.get_element         = ast_list_generator_map;
+		p_result->data.d.lgen.nb_elements         = (list.data.cls == &AST_CLS_LITERAL_LIST) ? list.data.d.llist.nb_elements : list.data.d.lgen.nb_elements;
+
+		return 0;
+	}
+
+
 	/* Ops */
-	if (p_src->data.cls == &AST_CLS_ADD || p_src->data.cls == &AST_CLS_SUB || p_src->data.cls == &AST_CLS_MUL) {
+	if (p_src->data.cls == &AST_CLS_ADD || p_src->data.cls == &AST_CLS_SUB || p_src->data.cls == &AST_CLS_MUL || p_src->data.cls == &AST_CLS_MOD) {
 		struct ev_ast_node lhs;
 		struct ev_ast_node rhs;
 
@@ -1261,6 +1357,8 @@ int evaluate_ast(struct ev_ast_node *p_result, const struct ev_ast_node *p_src, 
 				lhs.data.d.f = lhs.data.d.f - rhs.data.d.f;
 			} else if (p_src->data.cls == &AST_CLS_MUL) {
 				lhs.data.d.f = lhs.data.d.f * rhs.data.d.f;
+			} else if (p_src->data.cls == &AST_CLS_MOD) {
+				lhs.data.d.f = fmod(lhs.data.d.f, rhs.data.d.f);
 			} else {
 				abort();
 			}
@@ -1275,6 +1373,9 @@ int evaluate_ast(struct ev_ast_node *p_result, const struct ev_ast_node *p_src, 
 				lhs.data.d.i = lhs.data.d.i - rhs.data.d.i;
 			} else if (p_src->data.cls == &AST_CLS_MUL) {
 				lhs.data.d.i = lhs.data.d.i * rhs.data.d.i;
+			} else if (p_src->data.cls == &AST_CLS_MOD) {
+				lhs.data.d.i = lhs.data.d.i % rhs.data.d.i;
+				lhs.data.d.i += (lhs.data.d.i < 0) ? rhs.data.d.i : 0;
 			} else {
 				abort();
 			}
@@ -1519,6 +1620,11 @@ int main(int argc, char *argv[]) {
 		,"negative real objects"
 		);
 	run_test
+		("[]"
+		,"[]"
+		,"empty list"
+		);
+	run_test
 		("[1,-2,3.4,-4.5,5.6e2,-7.8e-2]"
 		,"[1,-2,3.4,-4.5,5.6e2,-7.8e-2]"
 		,"numeric objects in a list"
@@ -1643,8 +1749,22 @@ int main(int argc, char *argv[]) {
 		,"50"
 		,"extracting an element of the list returned by a function"
 		);
+	run_test
+		("map func(x) [1, x, x*x] [1,2,3]"
+		,"[[1,1,1],[1,2,4],[1,3,9]]"
+		,"map operation basics"
+		);
+	run_test
+		("map func(x) listval [\"a\",\"b\",\"c\",\"d\",\"e\"] x%5 range(-2,1,8)"
+		,"[\"d\",\"e\",\"a\",\"b\",\"c\",\"d\",\"e\",\"a\",\"b\",\"c\",\"d\"]"
+		,"map over a range basics"
+		);
+	run_test
+		("map func(x) range(x) range(0,5)"
+		,"[[],[0],[0,1],[0,1,2],[0,1,2,3],[0,1,2,3,4]]"
+		,"use map to generate a list of incrementing ranges over a range"
+		);
 
-	run_test("[]", "[]", "empty list");
 	//run_test("{}", "{}", "empty dict");
 
 	return EXIT_SUCCESS;
