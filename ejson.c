@@ -36,11 +36,13 @@ struct ast_node;
 struct ast_cls {
 	const char  *p_name;
 	int        (*to_jnode)(struct ast_node *p_node, struct jnode *p_dest);
-	void       (*debug_print)(struct ast_node *p_node, FILE *p_f, unsigned depth);
+	void       (*debug_print)(const struct ast_node *p_node, FILE *p_f, unsigned depth);
 };
 
 #define DEF_AST_CLS(name_, to_jnode_fn_, debug_print_fn_) \
 	static const struct ast_cls name_ = { #name_, to_jnode_fn_, debug_print_fn_ }
+
+struct ev_ast_node;
 
 struct ast_node {
 	const struct ast_cls *cls;
@@ -61,7 +63,7 @@ struct ast_node {
 			uint_fast32_t     nb_elements;
 		} llist; /* AST_CLS_LITERAL_LIST */
 		struct {
-			int             (*get_element)(struct ast_node *p_dest, struct ast_node *p_ast, struct ast_node **pp_stack, unsigned stack_size, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler);
+			int             (*get_element)(struct ev_ast_node *p_dest, const struct ev_ast_node *p_list, unsigned element, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler);
 			union {
 				struct {
 					long long first;
@@ -91,10 +93,21 @@ struct ast_node {
 			struct ast_node *p_function;
 			struct ast_node *p_input_list;
 		} map;
-
+		struct {
+			struct ast_node *p_list;
+			struct ast_node *p_index;
+		} listval;
 
 	} d;
 
+};
+
+struct ev_ast_node {
+	struct ast_node      data;
+
+	/* These may be undefined for certain classes of data. */
+	struct ev_ast_node **pp_stack;
+	unsigned             stack_size;
 };
 
 struct token;
@@ -122,28 +135,28 @@ struct token {
 	static const struct tok_def name_ = {#name_, precedence_, right_associative_, binop_ast_cls_}
 
 
-static void debug_print_null(struct ast_node *p_node, FILE *p_f, unsigned depth) {
+static void debug_print_null(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
 	fprintf(p_f, "%*s%s\n", depth, "", p_node->cls->p_name);
 }
-static void debug_print_int_like(struct ast_node *p_node, FILE *p_f, unsigned depth) {
+static void debug_print_int_like(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
 	fprintf(p_f, "%*s%s(%lld)\n", depth, "", p_node->cls->p_name, p_node->d.i);
 }
-static void debug_print_real(struct ast_node *p_node, FILE *p_f, unsigned depth) {
+static void debug_print_real(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
 	fprintf(p_f, "%*s%s(%f)\n", depth, "", p_node->cls->p_name, p_node->d.f);
 }
-static void debug_print_string(struct ast_node *p_node, FILE *p_f, unsigned depth) {
+static void debug_print_string(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
 	fprintf(p_f, "%*s%s('%s')\n", depth, "", p_node->cls->p_name, p_node->d.str.p_data);
 }
-static void debug_print_bool(struct ast_node *p_node, FILE *p_f, unsigned depth) {
+static void debug_print_bool(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
 	fprintf(p_f, "%*s%s(%s)\n", depth, "", p_node->cls->p_name, (p_node->d.i) ? "true" : "false");
 }
-static void debug_print_list(struct ast_node *p_node, FILE *p_f, unsigned depth) {
+static void debug_print_list(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
 	unsigned i;
 	fprintf(p_f, "%*s%s(%u)\n", depth, "", p_node->cls->p_name, p_node->d.llist.nb_elements);
 	for (i = 0; i < p_node->d.llist.nb_elements; i++)
 		p_node->d.llist.elements[i]->cls->debug_print(p_node->d.llist.elements[i], p_f, depth + 1);
 }
-static void debug_print_dict(struct ast_node *p_node, FILE *p_f, unsigned depth) {
+static void debug_print_dict(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
 	unsigned i;
 	fprintf(p_f, "%*s%s(%u)\n", depth, "", p_node->cls->p_name, p_node->d.ldict.nb_keys);
 	for (i = 0; i < p_node->d.ldict.nb_keys; i++) {
@@ -151,38 +164,42 @@ static void debug_print_dict(struct ast_node *p_node, FILE *p_f, unsigned depth)
 		p_node->d.ldict.elements[2*i+1]->cls->debug_print(p_node->d.ldict.elements[2*i+1], p_f, depth + 2);
 	}
 }
-static void debug_print_binop(struct ast_node *p_node, FILE *p_f, unsigned depth) {
+static void debug_print_binop(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
 	fprintf(p_f, "%*s%s\n", depth, "", p_node->cls->p_name);
 	p_node->d.binop.p_lhs->cls->debug_print(p_node->d.binop.p_lhs, p_f, depth + 1);
 	p_node->d.binop.p_rhs->cls->debug_print(p_node->d.binop.p_rhs, p_f, depth + 1);
 }
-static void debug_print_unop(struct ast_node *p_node, FILE *p_f, unsigned depth) {
+static void debug_print_unop(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
 	fprintf(p_f, "%*s%s\n", depth, "", p_node->cls->p_name);
 	p_node->d.binop.p_lhs->cls->debug_print(p_node->d.binop.p_lhs, p_f, depth + 1);
 }
-static void debug_print_builtin(struct ast_node *p_node, FILE *p_f, unsigned depth) {
+static void debug_print_builtin(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
 	unsigned i;
 	fprintf(p_f, "%*s%s\n", depth, "", p_node->cls->p_name);
 	for (i = 0; i < p_node->d.builtin.nb_args; i++)
 		p_node->d.builtin.pp_args[i]->cls->debug_print(p_node->d.builtin.pp_args[i], p_f, depth + 1);
 }
-static void debug_print_function(struct ast_node *p_node, FILE *p_f, unsigned depth) {
+static void debug_print_function(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
 	fprintf(p_f, "%*s%s(nb_args=%u)\n", depth, "", p_node->cls->p_name, p_node->d.fn.nb_args);
 	p_node->d.fn.node->cls->debug_print(p_node->d.fn.node, p_f, depth + 1);
 }
-static void debug_print_call(struct ast_node *p_node, FILE *p_f, unsigned depth) {
+static void debug_print_call(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
 	unsigned i;
 	fprintf(p_f, "%*s%s\n", depth, "", p_node->cls->p_name);
 	p_node->d.call.fn->cls->debug_print(p_node->d.call.fn, p_f, depth + 1);
 	for (i = 0; i < p_node->d.call.nb_args; i++)
 		p_node->d.call.pp_args[i]->cls->debug_print(p_node->d.call.pp_args[i], p_f, depth + 1);
 }
-
-static void debug_print_map(struct ast_node *p_node, FILE *p_f, unsigned depth) {
+static void debug_print_listval(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
+	fprintf(p_f, "%*s%s\n", depth, "", p_node->cls->p_name);
+	p_node->d.listval.p_list->cls->debug_print(p_node->d.listval.p_list, p_f, depth + 1);
+	p_node->d.listval.p_index->cls->debug_print(p_node->d.listval.p_index, p_f, depth + 1);
+}
+static void debug_print_map(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
 	abort();
 }
 
-static void debug_list_generator(struct ast_node *p_node, FILE *p_f, unsigned depth) {
+static void debug_list_generator(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
 	fprintf(p_f, "%*s%s\n", depth, "", p_node->cls->p_name);
 	/* TODO */
 }
@@ -204,6 +221,7 @@ DEF_AST_CLS(AST_CLS_EXP,             NULL, debug_print_binop);
 DEF_AST_CLS(AST_CLS_RANGE,           NULL, debug_print_builtin);
 DEF_AST_CLS(AST_CLS_FUNCTION,        NULL, debug_print_function);
 DEF_AST_CLS(AST_CLS_CALL,            NULL, debug_print_call);
+DEF_AST_CLS(AST_CLS_LISTVAL,         NULL, debug_print_listval);
 //DEF_AST_CLS(AST_CLS_CALL,            NULL, debug_print_call);
 DEF_AST_CLS(AST_CLS_STACKREF,        NULL, debug_print_int_like);
 DEF_AST_CLS(AST_CLS_LIST_GENERATOR,  NULL, debug_list_generator);
@@ -234,6 +252,7 @@ TOK_DECL(TOK_RANGE,      -1, 0, NULL); /* range */
 TOK_DECL(TOK_FUNC,       -1, 0, NULL); /* func */
 TOK_DECL(TOK_CALL,       -1, 0, NULL); /* call */
 TOK_DECL(TOK_DEFINE,     -1, 0, NULL); /* define */
+TOK_DECL(TOK_LISTVAL,    -1, 0, NULL); /* listval */
 
 TOK_DECL(TOK_IDENTIFIER, -1, 0, NULL); /* afasfasf */
 TOK_DECL(TOK_COMMA,      -1, 0, NULL); /* , */
@@ -411,6 +430,8 @@ int tokeniser_next(struct tokeniser *p_tokeniser) {
 			p_tokeniser->cur.cls = &TOK_FUNC;
 		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "define")) {
 			p_tokeniser->cur.cls = &TOK_DEFINE;
+		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "listval")) {
+			p_tokeniser->cur.cls = &TOK_LISTVAL;
 		} else {
 			p_tokeniser->cur.cls = &TOK_IDENTIFIER;
 		}
@@ -505,6 +526,15 @@ struct ast_node *parse_primary(struct evaluation_context *p_workspace, struct to
 		p_ret = *node;
 
 		if (tokeniser_next(p_tokeniser))
+			return NULL;
+	} else if (p_tokeniser->cur.cls == &TOK_LISTVAL) {
+		if (tokeniser_next(p_tokeniser))
+			return NULL;
+		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
+		p_ret->cls        = &AST_CLS_LISTVAL;
+		if ((p_ret->d.listval.p_list = expect_expression(p_workspace, p_tokeniser)) == NULL)
+			return NULL;
+		if ((p_ret->d.listval.p_index = expect_expression(p_workspace, p_tokeniser)) == NULL)
 			return NULL;
 	} else if (p_tokeniser->cur.cls == &TOK_INT) {
 		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
@@ -915,15 +945,38 @@ struct jnode_data {
 
 };
 
-struct jnode_stack {
-	unsigned          nb_stack;
-	struct ast_node **pp_nodes;
+static int to_jnode(struct jnode *p_node, struct ev_ast_node *p_ast, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler);
+
+struct list_element_fn_data {
+	struct p_error_handler  *p_error_handler;
+	struct ast_node        **pp_stack;
+	unsigned                 stack_size;
+	unsigned                 nb_elements;
+	struct ast_node        **pp_elements;
 };
 
-static int to_jnode(struct jnode *p_node, struct ast_node *p_ast, struct jnode_stack *p_stack, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler);
+struct execution_context {
+	struct ev_ast_node          object;
+	struct ejson_error_handler *p_error_handler;
+
+};
+
+int evaluate_ast(struct ev_ast_node *p_dest, const struct ev_ast_node *p_src, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler);
 
 static int get_literal_list_element_fn(struct jnode *p_dest, void *ctx, struct linear_allocator *p_alloc, unsigned idx) {
-	return to_jnode(p_dest, ((struct ast_node **)ctx)[idx], NULL, p_alloc, NULL);
+	struct execution_context *ec = ctx;
+	struct ev_ast_node tmp = ec->object;
+	struct ev_ast_node ret;
+
+	if (idx >= ec->object.data.d.llist.nb_elements)
+		return -1;
+
+	tmp.data = *(tmp.data.d.llist.elements[idx]);
+
+	if (evaluate_ast(&ret, &tmp, p_alloc, ec->p_error_handler))
+		return -1;
+
+	return to_jnode(p_dest, &ret, p_alloc, NULL);
 }
 
 struct lrange {
@@ -941,230 +994,291 @@ static int get_range_list_element_fn(struct jnode *p_dest, void *ctx, struct lin
 	return 0;
 }
 
-static struct ast_node *dereference(struct ast_node *p_ast, struct jnode_stack *p_stack) {
-	while (p_ast->cls == &AST_CLS_STACKREF) {
-		assert(p_stack != NULL);
-		assert(p_ast->d.i < p_stack->nb_stack);
-		p_ast = p_stack->pp_nodes[p_ast->d.i];
-		assert(p_ast != NULL);
-	}
-	return p_ast;
-}
+int ast_list_generator_get_element(struct ev_ast_node *p_dest, const struct ev_ast_node *p_list, unsigned element, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler) {
+	struct ev_ast_node idx;
+	size_t             save;
 
-int evaluate_ast(struct ast_node *p_dest, struct ast_node *p_ast, struct ast_node **pp_stack, unsigned stack_size, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler);
+	assert(p_list->data.cls == &AST_CLS_LIST_GENERATOR);
 
-int ast_list_generator_get_element(struct ast_node *p_dest, struct ast_node *p_ast, struct ast_node **pp_stack, unsigned stack_size, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler) {
-	struct ast_node idx;
-	size_t save;
-	assert(stack_size);
-	save = linear_allocator_save(p_alloc);
-	if (evaluate_ast(&idx, pp_stack[stack_size - 1], pp_stack, stack_size - 1, p_alloc, p_error_handler))
-		return -1;
-	if (idx.cls != &AST_CLS_LITERAL_INT)
-		return ejson_error(p_error_handler, "list indexes should be integers\n");
-	if (idx.d.i < 0 || (unsigned)idx.d.i >= p_ast->d.lgen.nb_elements)
+	if (element >= p_list->data.d.lgen.nb_elements)
 		return ejson_error(p_error_handler, "list index out of range\n");
-	linear_allocator_restore(p_alloc, save);
-	p_dest->cls = &AST_CLS_LITERAL_INT;
-	p_dest->d.i = p_ast->d.lgen.d.range.first + p_ast->d.lgen.d.range.step * idx.d.i;
+
+	p_dest->data.cls   = &AST_CLS_LITERAL_INT;
+	p_dest->data.d.i   = p_list->data.d.lgen.d.range.first + p_list->data.d.lgen.d.range.step * (long long)element;
+	p_dest->pp_stack   = p_list->pp_stack;
+	p_dest->stack_size = p_list->stack_size;
 	return 0;
 }
 
-int evaluate_ast(struct ast_node *p_dest, struct ast_node *p_ast, struct ast_node **pp_stack, unsigned stack_size, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler) {
+/* Evaluate to the point where we have a node that can be used as a JSON
+ * element.
+ * 
+ * 
+ * call -> push values onto stack and execute function
+ * 
+ * list generator -> return list generator node
+ * 
+ * 
+ * 
+ *  */
+int evaluate_ast(struct ev_ast_node *p_result, const struct ev_ast_node *p_src, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler) {
 	/* Move through stack references. */
-	while (p_ast->cls == &AST_CLS_STACKREF && stack_size) {
-		assert(pp_stack != NULL);
-		assert(p_ast->d.i > 0 && p_ast->d.i <= stack_size);
-		p_ast = pp_stack[stack_size - p_ast->d.i];
-		assert(p_ast != NULL);
+	while (p_src->data.cls == &AST_CLS_STACKREF) {
+		assert(p_src->pp_stack != NULL);
+		assert(p_src->data.d.i > 0 && p_src->data.d.i <= p_src->stack_size);
+		p_src = p_src->pp_stack[p_src->stack_size - p_src->data.d.i];
+		assert(p_src != NULL);
 	}
 	
 	/* Shortcuts for fully simplified objects. */
-	if  (   p_ast->cls == &AST_CLS_LITERAL_INT
-	    ||  p_ast->cls == &AST_CLS_LITERAL_LIST
-	    ||  p_ast->cls == &AST_CLS_LITERAL_BOOL
-	    ||  p_ast->cls == &AST_CLS_LITERAL_STRING
-	    ||  p_ast->cls == &AST_CLS_LITERAL_FLOAT
-	    ||  p_ast->cls == &AST_CLS_LITERAL_NULL
-	    ||  p_ast->cls == &AST_CLS_LITERAL_DICT
-	    ||  p_ast->cls == &AST_CLS_FUNCTION
+	if  (   p_src->data.cls == &AST_CLS_LITERAL_INT
+	    ||  p_src->data.cls == &AST_CLS_LITERAL_BOOL
+	    ||  p_src->data.cls == &AST_CLS_LITERAL_STRING
+	    ||  p_src->data.cls == &AST_CLS_LITERAL_FLOAT
+	    ||  p_src->data.cls == &AST_CLS_LITERAL_NULL
 	    ) {
-		*p_dest = *p_ast;
+		*p_result = *p_src;
+#ifndef NDEBUG
+		/* Set these as a debug courtesy so we get a crash if anything tries
+		 * to access it. */
+		p_result->pp_stack   = NULL;
+		p_result->stack_size = 0;
+#endif
 		return 0;
 	}
 
-	/* Function call */
-	if (p_ast->cls == &AST_CLS_CALL) {
-		struct ast_node function;
+	if  (   p_src->data.cls == &AST_CLS_LIST_GENERATOR
+	    ||  p_src->data.cls == &AST_CLS_LITERAL_LIST
+	    ||  p_src->data.cls == &AST_CLS_LITERAL_DICT
+	    ||  p_src->data.cls == &AST_CLS_FUNCTION
+	    ) {
+		*p_result = *p_src;
+		return 0;
+	}
 
-		if (evaluate_ast(&function, p_ast->d.call.fn, pp_stack, stack_size, p_alloc, p_error_handler) || function.cls != &AST_CLS_FUNCTION)
-			return ejson_error(p_error_handler, "call expects a function\n");
+	if (p_src->data.cls == &AST_CLS_LISTVAL) {
+		struct ev_ast_node list;
+		struct ev_ast_node idx;
+		size_t save;
 
-		if (p_ast->d.call.nb_args != function.d.fn.nb_args)
-			return ejson_error(p_error_handler, "function supplied with incorrect number of arguments (call=%u,fn=%u)\n", p_ast->d.call.nb_args, function.d.fn.nb_args);
+		struct ev_ast_node tmp;
 
-		if (p_ast->d.call.nb_args) {
-			unsigned i;
+		tmp.data       = *(p_src->data.d.listval.p_index);
+		tmp.pp_stack   = p_src->pp_stack;
+		tmp.stack_size = p_src->stack_size;
+		
+		save = linear_allocator_save(p_alloc);
+		if (evaluate_ast(&idx, &tmp, p_alloc, p_error_handler))
+			return ejson_error(p_error_handler, "couldn't evaluate listval index expression\n");
+		if (idx.data.cls != &AST_CLS_LITERAL_INT)
+			return ejson_error(p_error_handler, "listval index expression was not an integer\n");
+		linear_allocator_restore(p_alloc, save);
+
+		tmp.data = *(p_src->data.d.listval.p_list);
+		assert(tmp.pp_stack   == p_src->pp_stack);
+		assert(tmp.stack_size == p_src->stack_size);
+
+		if (evaluate_ast(&list, &tmp, p_alloc, p_error_handler))
+			return ejson_error(p_error_handler, "couldn't evaluate listval list expression\n");
+
+		if (list.data.cls == &AST_CLS_LIST_GENERATOR) {
 			struct ast_node **pp_stack2;
 
-			if ((pp_stack2 = linear_allocator_alloc(p_alloc, sizeof(struct ast_node *) * (stack_size + p_ast->d.call.nb_args))) == NULL)
+			if (list.data.d.lgen.get_element(p_result, &list, idx.data.d.i, p_alloc, p_error_handler))
+				return ejson_error(p_error_handler, "could not get element\n");
+
+			return 0;
+		} else if (list.data.cls == &AST_CLS_LITERAL_LIST) {
+			if (idx.data.d.i < 0 || idx.data.d.i >= list.data.d.llist.nb_elements)
+				return ejson_error(p_error_handler, "listval list index was out of bounds\n");
+
+			list.data = *(list.data.d.llist.elements[idx.data.d.i]);
+
+			if (evaluate_ast(p_result, &list, p_alloc, p_error_handler))
+				return ejson_error(p_error_handler, "could not evaluate list item\n");
+		
+			return 0;
+		}
+
+		return ejson_error(p_error_handler, "listval list expression was not a list\n");
+	}
+
+	/* Function call */
+	if (p_src->data.cls == &AST_CLS_CALL) {
+		struct ev_ast_node function;
+		struct ev_ast_node tmp;
+
+		tmp = *p_src;
+		tmp.data = *(p_src->data.d.call.fn);
+
+		if (evaluate_ast(&function, &tmp, p_alloc, p_error_handler) || function.data.cls != &AST_CLS_FUNCTION)
+			return ejson_error(p_error_handler, "call expects a function\n");
+
+		if (p_src->data.d.call.nb_args != function.data.d.fn.nb_args)
+			return ejson_error(p_error_handler, "function supplied with incorrect number of arguments (call=%u,fn=%u)\n", p_src->data.d.call.nb_args, function.data.d.fn.nb_args);
+
+		if (p_src->data.d.call.nb_args) {
+			unsigned i;
+			struct ev_ast_node **pp_stack2;
+			tmp = function;
+
+			if ((pp_stack2 = linear_allocator_alloc(p_alloc, sizeof(struct ev_ast_node *) * (function.stack_size + p_src->data.d.call.nb_args))) == NULL)
 				return ejson_error(p_error_handler, "oom\n");
 
-			if (stack_size)
-				memcpy(pp_stack2, pp_stack, stack_size * sizeof(struct ast_node *));
+			if (function.stack_size)
+				memcpy(pp_stack2, function.pp_stack, function.stack_size * sizeof(struct ev_ast_node *));
 
-			for (i = 0; i < p_ast->d.call.nb_args; i++) {
-				if ((pp_stack2[stack_size + p_ast->d.call.nb_args - 1 - i] = linear_allocator_alloc(p_alloc, sizeof(struct ast_node))) == NULL)
+			for (i = 0; i < p_src->data.d.call.nb_args; i++) {
+				if ((pp_stack2[function.stack_size + p_src->data.d.call.nb_args - 1 - i] = linear_allocator_alloc(p_alloc, sizeof(struct ev_ast_node))) == NULL)
 					return ejson_error(p_error_handler, "oom\n");
-				if (evaluate_ast(pp_stack2[stack_size + p_ast->d.call.nb_args - 1 - i], p_ast->d.call.pp_args[i], pp_stack, stack_size, p_alloc, p_error_handler))
+				tmp.data = *(p_src->data.d.call.pp_args[i]);
+				if (evaluate_ast(pp_stack2[function.stack_size + p_src->data.d.call.nb_args - 1 - i], &tmp, p_alloc, p_error_handler))
 					return ejson_error(p_error_handler, "failed to eval argument\n");
 			}
 
-			pp_stack    = pp_stack2;
-			stack_size += p_ast->d.call.nb_args;
+			function.pp_stack    = pp_stack2;
+			function.stack_size += p_src->data.d.call.nb_args;
 		}
 
-		if (evaluate_ast(p_dest, function.d.fn.node, pp_stack, stack_size, p_alloc, p_error_handler))
+		function.data = *(function.data.d.fn.node);
+
+		if (evaluate_ast(p_result, &function, p_alloc, p_error_handler))
 			return ejson_error(p_error_handler, "failed to execute function\n");
 
 		return 0;
 	}
 
 	/* Unary negation */
-	if (p_ast->cls == &AST_CLS_NEG) {
-		if (evaluate_ast(p_dest, p_ast->d.binop.p_lhs, pp_stack, stack_size, p_alloc, p_error_handler))
+	if (p_src->data.cls == &AST_CLS_NEG) {
+		struct ev_ast_node tmp = *p_src;
+		tmp.data = *(tmp.data.d.binop.p_lhs);
+
+		if (evaluate_ast(p_result, &tmp, p_alloc, p_error_handler))
 			return -1;
 
-		if (p_dest->cls == &AST_CLS_LITERAL_INT) {
-			p_dest->d.i = -p_dest->d.i;
+		if (p_result->data.cls == &AST_CLS_LITERAL_INT) {
+			p_result->data.d.i = -p_result->data.d.i;
 			return 0;
 		}
 
-		if (p_dest->cls == &AST_CLS_LITERAL_FLOAT) {
-			p_dest->d.f = -p_dest->d.f;
+		if (p_result->data.cls == &AST_CLS_LITERAL_FLOAT) {
+			p_result->data.d.f = -p_result->data.d.f;
 			return 0;
 		}
 
 		return -1;
 	}
 
-	if (p_ast->cls == &AST_CLS_LIST_GENERATOR) {
-		if (!stack_size) {
-			*p_dest = *p_ast;
-			return 0;
-		}
-		return p_ast->d.lgen.get_element(p_dest, p_ast, pp_stack, stack_size, p_alloc, p_error_handler);
-	}
-
 	/* Convert range into an accessor object */
-	if (p_ast->cls == &AST_CLS_RANGE) {
+	if (p_src->data.cls == &AST_CLS_RANGE) {
 		struct lrange    lrange;
 		size_t save = linear_allocator_save(p_alloc);
 
-		if (p_ast->d.builtin.nb_args == 1) {
-			struct ast_node numel;
-			if (evaluate_ast(&numel, p_ast->d.builtin.pp_args[0], pp_stack, stack_size, p_alloc, p_error_handler) || numel.cls != &AST_CLS_LITERAL_INT)
+		if (p_src->data.d.builtin.nb_args == 1) {
+			struct ev_ast_node numel;
+			struct ev_ast_node tmp = *p_src;
+			if ((tmp.data = *(p_src->data.d.builtin.pp_args[0]), evaluate_ast(&numel, &tmp, p_alloc, p_error_handler)) || numel.data.cls != &AST_CLS_LITERAL_INT)
 				return -1;
 			lrange.first     = 0;
 			lrange.step_size = 1;
-			lrange.numel     = numel.d.i;
-		} else if (p_ast->d.builtin.nb_args == 2) {
-			struct ast_node first, last;
-			if  (   evaluate_ast(&first, p_ast->d.builtin.pp_args[0], pp_stack, stack_size, p_alloc, p_error_handler) || first.cls != &AST_CLS_LITERAL_INT
-			    ||  evaluate_ast(&last, p_ast->d.builtin.pp_args[1], pp_stack, stack_size, p_alloc, p_error_handler) || last.cls != &AST_CLS_LITERAL_INT
+			lrange.numel     = numel.data.d.i;
+		} else if (p_src->data.d.builtin.nb_args == 2) {
+			struct ev_ast_node first, last;
+			struct ev_ast_node tmp = *p_src;
+			if  (   (tmp.data = *(p_src->data.d.builtin.pp_args[0]), evaluate_ast(&first, &tmp, p_alloc, p_error_handler)) || first.data.cls != &AST_CLS_LITERAL_INT
+			    ||  (tmp.data = *(p_src->data.d.builtin.pp_args[1]), evaluate_ast(&last, &tmp, p_alloc, p_error_handler)) || last.data.cls != &AST_CLS_LITERAL_INT
 			    )
 				return -1;
-			lrange.first     = first.d.i;
-			lrange.step_size = (first.d.i > last.d.i) ? -1 : 1;
-			lrange.numel     = ((first.d.i > last.d.i) ? (first.d.i - last.d.i) : (last.d.i - first.d.i)) + 1;
+			lrange.first     = first.data.d.i;
+			lrange.step_size = (first.data.d.i > last.data.d.i) ? -1 : 1;
+			lrange.numel     = ((first.data.d.i > last.data.d.i) ? (first.data.d.i - last.data.d.i) : (last.data.d.i - first.data.d.i)) + 1;
 		} else {
-			struct ast_node first, step, last;
-			assert(p_ast->d.builtin.nb_args == 3);
-			if  (   evaluate_ast(&first, p_ast->d.builtin.pp_args[0], pp_stack, stack_size, p_alloc, p_error_handler) || first.cls != &AST_CLS_LITERAL_INT
-			    ||  evaluate_ast(&step, p_ast->d.builtin.pp_args[1], pp_stack, stack_size, p_alloc, p_error_handler) || step.cls != &AST_CLS_LITERAL_INT
-			    ||  evaluate_ast(&last, p_ast->d.builtin.pp_args[2], pp_stack, stack_size, p_alloc, p_error_handler) || last.cls != &AST_CLS_LITERAL_INT
-			    ||  step.d.i == 0
-			    ||  (step.d.i > 0 && (first.d.i > last.d.i))
-			    ||  (step.d.i < 0 && (first.d.i < last.d.i))
+			struct ev_ast_node first, step, last;
+			struct ev_ast_node tmp = *p_src;
+			assert(p_src->data.d.builtin.nb_args == 3);
+			if  (   (tmp.data = *(p_src->data.d.builtin.pp_args[0]), evaluate_ast(&first, &tmp, p_alloc, p_error_handler)) || first.data.cls != &AST_CLS_LITERAL_INT
+			    ||  (tmp.data = *(p_src->data.d.builtin.pp_args[1]), evaluate_ast(&step, &tmp, p_alloc, p_error_handler)) || step.data.cls != &AST_CLS_LITERAL_INT
+			    ||  (tmp.data = *(p_src->data.d.builtin.pp_args[2]), evaluate_ast(&last, &tmp, p_alloc, p_error_handler)) || last.data.cls != &AST_CLS_LITERAL_INT
+			    ||  step.data.d.i == 0
+			    ||  (step.data.d.i > 0 && (first.data.d.i > last.data.d.i))
+			    ||  (step.data.d.i < 0 && (first.data.d.i < last.data.d.i))
 			    )
 				return -1;
-			lrange.first     = first.d.i;
-			lrange.step_size = step.d.i;
-			lrange.numel     = (last.d.i - first.d.i) / step.d.i + 1;
+			lrange.first     = first.data.d.i;
+			lrange.step_size = step.data.d.i;
+			lrange.numel     = (last.data.d.i - first.data.d.i) / step.data.d.i + 1;
 		}
 
 		linear_allocator_restore(p_alloc, save);
-
-		struct ast_node *p_tmp = p_dest;
-		if (stack_size) {
-			p_tmp = linear_allocator_alloc(p_alloc, sizeof(*p_tmp));
-		}
-		p_tmp->cls                  = &AST_CLS_LIST_GENERATOR;
-		p_tmp->d.lgen.get_element   = ast_list_generator_get_element;
-		p_tmp->d.lgen.nb_elements   = lrange.numel;
-		p_tmp->d.lgen.d.range.first = lrange.first;
-		p_tmp->d.lgen.d.range.step  = lrange.step_size;
-		if (stack_size) {
-			return p_tmp->d.lgen.get_element(p_dest, p_tmp, pp_stack, stack_size, p_alloc, p_error_handler);
-		}
+		
+		p_result->pp_stack                  = p_src->pp_stack;
+		p_result->stack_size                = p_src->stack_size;
+		p_result->data.cls                  = &AST_CLS_LIST_GENERATOR;
+		p_result->data.d.lgen.get_element   = ast_list_generator_get_element;
+		p_result->data.d.lgen.nb_elements   = lrange.numel;
+		p_result->data.d.lgen.d.range.first = lrange.first;
+		p_result->data.d.lgen.d.range.step  = lrange.step_size;
 
 		return 0;
 	}
 
 	/* Ops */
-	if (p_ast->cls == &AST_CLS_ADD || p_ast->cls == &AST_CLS_SUB || p_ast->cls == &AST_CLS_MUL) {
-		struct ast_node lhs;
-		struct ast_node rhs;
-		struct ast_node *p_ret;
+	if (p_src->data.cls == &AST_CLS_ADD || p_src->data.cls == &AST_CLS_SUB || p_src->data.cls == &AST_CLS_MUL) {
+		struct ev_ast_node lhs;
+		struct ev_ast_node rhs;
 
-		if (evaluate_ast(&lhs, p_ast->d.binop.p_lhs, pp_stack, stack_size, p_alloc, p_error_handler))
+		struct ev_ast_node tmp = *p_src;
+
+		tmp.data = *(p_src->data.d.binop.p_lhs);
+		if (evaluate_ast(&lhs, &tmp, p_alloc, p_error_handler))
 			return ejson_error(p_error_handler, "could not evaluate binop lhs\n");
 
-		if (evaluate_ast(&rhs, p_ast->d.binop.p_rhs, pp_stack, stack_size, p_alloc, p_error_handler))
+		tmp.data = *(p_src->data.d.binop.p_rhs);
+		if (evaluate_ast(&rhs, &tmp, p_alloc, p_error_handler))
 			return ejson_error(p_error_handler, "could not evaluate binop rhs\n");
 
 		/* Deal with string concatenation */
-		if (p_ast->cls == &AST_CLS_ADD && (lhs.cls == &AST_CLS_LITERAL_STRING || rhs.cls == &AST_CLS_LITERAL_STRING)) {
-			if (lhs.cls != &AST_CLS_LITERAL_STRING || rhs.cls != &AST_CLS_LITERAL_STRING)
+		if (p_src->data.cls == &AST_CLS_ADD && (lhs.data.cls == &AST_CLS_LITERAL_STRING || rhs.data.cls == &AST_CLS_LITERAL_STRING)) {
+			if (lhs.data.cls != &AST_CLS_LITERAL_STRING || rhs.data.cls != &AST_CLS_LITERAL_STRING)
 				return ejson_error(p_error_handler, "using + for concatenation requires lhs and rhs to be strings.\n");
 			abort(); /* implement me */
 			return -1;
 		}
 
 		/* Promote types */
-		if (lhs.cls == &AST_CLS_LITERAL_FLOAT && rhs.cls == &AST_CLS_LITERAL_INT) {
-			rhs.d.f = rhs.d.i;
-			rhs.cls = &AST_CLS_LITERAL_FLOAT;
-		} else if (lhs.cls == &AST_CLS_LITERAL_INT && rhs.cls == &AST_CLS_LITERAL_FLOAT) {
-			lhs.d.f = lhs.d.i;
-			lhs.cls = &AST_CLS_LITERAL_FLOAT;
+		if (lhs.data.cls == &AST_CLS_LITERAL_FLOAT && rhs.data.cls == &AST_CLS_LITERAL_INT) {
+			rhs.data.d.f = rhs.data.d.i;
+			rhs.data.cls = &AST_CLS_LITERAL_FLOAT;
+		} else if (lhs.data.cls == &AST_CLS_LITERAL_INT && rhs.data.cls == &AST_CLS_LITERAL_FLOAT) {
+			lhs.data.d.f = lhs.data.d.i;
+			lhs.data.cls = &AST_CLS_LITERAL_FLOAT;
 		}
 
-		if (lhs.cls == &AST_CLS_LITERAL_FLOAT && rhs.cls == &AST_CLS_LITERAL_FLOAT) {
-			if (p_ast->cls == &AST_CLS_ADD) {
-				lhs.d.f = lhs.d.f + rhs.d.f;
-			} else if (p_ast->cls == &AST_CLS_SUB) {
-				lhs.d.f = lhs.d.f - rhs.d.f;
-			} else if (p_ast->cls == &AST_CLS_MUL) {
-				lhs.d.f = lhs.d.f * rhs.d.f;
+		if (lhs.data.cls == &AST_CLS_LITERAL_FLOAT && rhs.data.cls == &AST_CLS_LITERAL_FLOAT) {
+			if (p_src->data.cls == &AST_CLS_ADD) {
+				lhs.data.d.f = lhs.data.d.f + rhs.data.d.f;
+			} else if (p_src->data.cls == &AST_CLS_SUB) {
+				lhs.data.d.f = lhs.data.d.f - rhs.data.d.f;
+			} else if (p_src->data.cls == &AST_CLS_MUL) {
+				lhs.data.d.f = lhs.data.d.f * rhs.data.d.f;
 			} else {
 				abort();
 			}
-			*p_dest = lhs;
+			*p_result = lhs;
 			return 0;
 		}
 
-		if (lhs.cls == &AST_CLS_LITERAL_INT && rhs.cls == &AST_CLS_LITERAL_INT) {
-			if (p_ast->cls == &AST_CLS_ADD) {
-				lhs.d.i = lhs.d.i + rhs.d.i;
-			} else if (p_ast->cls == &AST_CLS_SUB) {
-				lhs.d.i = lhs.d.i - rhs.d.i;
-			} else if (p_ast->cls == &AST_CLS_MUL) {
-				lhs.d.i = lhs.d.i * rhs.d.i;
+		if (lhs.data.cls == &AST_CLS_LITERAL_INT && rhs.data.cls == &AST_CLS_LITERAL_INT) {
+			if (p_src->data.cls == &AST_CLS_ADD) {
+				lhs.data.d.i = lhs.data.d.i + rhs.data.d.i;
+			} else if (p_src->data.cls == &AST_CLS_SUB) {
+				lhs.data.d.i = lhs.data.d.i - rhs.data.d.i;
+			} else if (p_src->data.cls == &AST_CLS_MUL) {
+				lhs.data.d.i = lhs.data.d.i * rhs.data.d.i;
 			} else {
 				abort();
 			}
-			*p_dest = lhs;
+			*p_result = lhs;
 			return 0;
 		}
 
@@ -1173,106 +1287,88 @@ int evaluate_ast(struct ast_node *p_dest, struct ast_node *p_ast, struct ast_nod
 		return -1;
 	}
 
-
-	fprintf(stderr, "what?");
-	printf("---\n");
-	p_ast->cls->debug_print(p_ast, stdout, 10);
-	printf("---\n");
-	fprintf(stderr, "endwhat?");
+	fprintf(stderr, "what?\n");
+	p_src->data.cls->debug_print(&(p_src->data), stderr, 10);
+	fprintf(stderr, "endwhat?\n");
 	abort();
 
 	return -1;
 }
 
-struct execution_context {
-	struct ast_node            *p_object;
-	struct ast_node           **pp_stack;
-	unsigned                    stack_size;
-	struct ejson_error_handler *p_error_handler;
-
-};
-
-static int to_jnode(struct jnode *p_node, struct ast_node *p_ast, struct jnode_stack *p_stack, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler);
 
 static int jnode_list_get_element(struct jnode *p_dest, void *ctx, struct linear_allocator *p_alloc, unsigned idx) {
 	struct execution_context *ec   = ctx;
-	struct ast_node *obj           = linear_allocator_alloc(p_alloc, sizeof(struct ast_node));
-	struct ast_node **pp_stack2    = linear_allocator_alloc(p_alloc, sizeof(struct ast_node *) * (ec->stack_size + 1));
-	if (ec->stack_size)
-		memcpy(pp_stack2, ec->pp_stack, ec->stack_size * sizeof(struct ast_node *));
-	pp_stack2[ec->stack_size]      = linear_allocator_alloc(p_alloc, sizeof(struct ast_node));
-	pp_stack2[ec->stack_size]->cls = &AST_CLS_LITERAL_INT;
-	pp_stack2[ec->stack_size]->d.i = idx;
+	struct ev_ast_node tmp;
 
-	if (evaluate_ast(obj, ec->p_object, pp_stack2, ec->stack_size + 1, p_alloc, ec->p_error_handler))
+	if (ec->object.data.d.lgen.get_element(&tmp, &(ec->object), idx, p_alloc, ec->p_error_handler))
 		return -1;
 
-	//obj->cls->debug_print(obj, stdout, 5);
-
-	return to_jnode(p_dest, obj, NULL, p_alloc, ec->p_error_handler);
+	return to_jnode(p_dest, &tmp, p_alloc, ec->p_error_handler);
 }
 
-static int to_jnode(struct jnode *p_node, struct ast_node *p_ast, struct jnode_stack *p_stack, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler) {
-	struct ast_node ast;
+static int to_jnode(struct jnode *p_node, struct ev_ast_node *p_src, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler) {
+	struct ev_ast_node ast;
 
-	assert(p_ast != NULL);
+	assert(p_src != NULL);
 
-	if (evaluate_ast(&ast, p_ast, NULL, 0, p_alloc, p_error_handler))
+	/* Fully simplify - perhaps we should assert the thing has already been simplified? */
+	if (evaluate_ast(&ast, p_src, p_alloc, p_error_handler))
 		return -1;
 
-	if (ast.cls == &AST_CLS_LITERAL_INT) {
+	if (ast.data.cls == &AST_CLS_LITERAL_INT) {
 		p_node->cls        = JNODE_CLS_INTEGER;
-		p_node->d.int_bool = ast.d.i;
+		p_node->d.int_bool = ast.data.d.i;
 		return 0;
 	}
 	
-	if (ast.cls == &AST_CLS_LITERAL_FLOAT) {
+	if (ast.data.cls == &AST_CLS_LITERAL_FLOAT) {
 		p_node->cls    = JNODE_CLS_REAL;
-		p_node->d.real = ast.d.f;
+		p_node->d.real = ast.data.d.f;
 		return 0;
 	}
 
-	if (ast.cls == &AST_CLS_LITERAL_STRING) {
+	if (ast.data.cls == &AST_CLS_LITERAL_STRING) {
 		p_node->cls          = JNODE_CLS_STRING;
-		p_node->d.string.buf = ast.d.str.p_data;
+		p_node->d.string.buf = ast.data.d.str.p_data;
 		return 0;
 	}
 
-	if (ast.cls == &AST_CLS_LITERAL_NULL) {
+	if (ast.data.cls == &AST_CLS_LITERAL_NULL) {
 		p_node->cls = JNODE_CLS_NULL;
 		return 0;
 	}
 
-	if (ast.cls == &AST_CLS_LITERAL_BOOL) {
+	if (ast.data.cls == &AST_CLS_LITERAL_BOOL) {
 		p_node->cls        = JNODE_CLS_BOOL;
-		p_node->d.int_bool = ast.d.i;
+		p_node->d.int_bool = ast.data.d.i;
 		return 0;
 	}
 
-	if (ast.cls == &AST_CLS_LITERAL_LIST) {
+	if (ast.data.cls == &AST_CLS_LITERAL_LIST) {
+		struct execution_context *ec = linear_allocator_alloc(p_alloc, sizeof(struct execution_context));
+		ec->p_error_handler          = p_error_handler;
+		ec->object                   = ast;
 		p_node->cls                  = JNODE_CLS_LIST;
-		p_node->d.list.ctx           = ast.d.llist.elements;
-		p_node->d.list.nb_elements   = ast.d.llist.nb_elements;
+		p_node->d.list.ctx           = ec;
+		p_node->d.list.nb_elements   = ast.data.d.llist.nb_elements;
 		p_node->d.list.get_elemenent = get_literal_list_element_fn;
 		return 0;
 	}
 
-	if (ast.cls == &AST_CLS_LIST_GENERATOR) {
+	if (ast.data.cls == &AST_CLS_LIST_GENERATOR) {
 		struct execution_context *ec = linear_allocator_alloc(p_alloc, sizeof(struct execution_context));
 		ec->p_error_handler          = p_error_handler;
-		ec->p_object                 = p_ast;
-		ec->pp_stack                 = NULL;
-		ec->stack_size               = 0;
+		ec->object                   = ast;
 		p_node->cls                  = JNODE_CLS_LIST;
 		p_node->d.list.ctx           = ec;
-		p_node->d.list.nb_elements   = ast.d.lgen.nb_elements;
+		p_node->d.list.nb_elements   = ast.data.d.lgen.nb_elements;
 		p_node->d.list.get_elemenent = jnode_list_get_element;
 		return 0;
 	}
 
-	printf("---\n");
-	ast.cls->debug_print(&ast, stdout, 10);
-	printf("---\n");
+	fprintf(stderr, "cannot convert the following type to json ---\n");
+	ast.data.cls->debug_print(&(ast.data), stderr, 10);
+	fprintf(stderr, "---\n");
 	abort();
 
 	return -1;
@@ -1280,6 +1376,7 @@ static int to_jnode(struct jnode *p_node, struct ast_node *p_ast, struct jnode_s
 
 int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser, struct ejson_error_handler *p_error_handler) {
 	struct ast_node *p_obj;
+	struct ev_ast_node tmp;
 	while (p_tokeniser->cur.cls == &TOK_DEFINE) {
 		const struct istring *p_key;
 		void **pp_obj;
@@ -1301,13 +1398,16 @@ int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace,
 	if ((p_obj = expect_expression(p_workspace, p_tokeniser)) == NULL)
 		return ejson_error(p_error_handler, "expected main document expression\n");
 	//p_obj->cls->debug_print(p_obj, stdout, 20);
-	if (to_jnode(p_node, p_obj, NULL, &(p_workspace->alloc), p_error_handler))
+	tmp.data = *p_obj;
+	tmp.pp_stack = NULL;
+	tmp.stack_size = 0;
+	if (to_jnode(p_node, &tmp, &(p_workspace->alloc), p_error_handler))
 		return ejson_error(p_error_handler, "could not convert AST to root document node\n");
 	return 0;
 }
 
 
-#if EJSON_TEST
+#if EJSON_TEST||1
 
 #include "json_simple_load.h"
 #include "json_iface_utils.h"
@@ -1347,7 +1447,7 @@ int run_test(const char *p_ejson, const char *p_ref, const char *p_name) {
 	a3.pos = 0;
 
 	if (parse_json(&ref, &a1, &a2, p_ref))
-		return unexpected_fail("could not parse reference JSON\n");
+		return unexpected_fail("could not parse reference JSON:\n  %s\n", p_ref);
 
 	tokeniser_start(&t, (char *)p_ejson);
 
@@ -1358,7 +1458,7 @@ int run_test(const char *p_ejson, const char *p_ref, const char *p_name) {
 		return unexpected_fail("could not init workspace\n");
 
 	if (parse_document(&dut, &ws, &t, &err))
-		return (fprintf(stderr, "could not parse dut\n"), -1);
+		return (fprintf(stderr, "could not parse dut:\n  %s\n", p_ejson), -1);
 
 	if ((d = are_different(&ref, &dut, &a3)) < 0) {
 		return unexpected_fail("are_different failed to execute\n");
@@ -1489,6 +1589,11 @@ int main(int argc, char *argv[]) {
 		,"function call that returns the argument"
 		);
 	run_test
+		("call (func(x) [x]) [55]"
+		,"[55]"
+		,"function call that returns the argument in a list"
+		);
+	run_test
 		("call (func(x, y, z) x * y + z) [3, 5, 7]"
 		,"22"
 		,"function mac-like function"
@@ -1511,6 +1616,21 @@ int main(int argc, char *argv[]) {
 	run_test
 		("define x = func(z) z*z; define y = 7; call x [y]"
 		,"49"
+		,"use a workspace variable as a function"
+		);
+	run_test
+		("listval [1,2,3] 1"
+		,"2"
+		,"listval list extraction"
+		);
+	run_test
+		("listval range(10) 4"
+		,"4"
+		,"list extraction from a range"
+		);
+	run_test
+		("listval (call (func(x) [1, x, 2, 3]) [50]) 1"
+		,"50"
 		,"use a workspace variable as a function"
 		);
 
