@@ -118,6 +118,27 @@ struct ev_ast_node {
 	unsigned             stack_size;
 };
 
+
+#define DICTNODE_BITS (2)
+#define DICTNODE_NUM  (1u << DICTNODE_BITS)
+#define DICTNODE_MASK (DICTNODE_NUM - 1u)
+
+struct dictnode {
+	uint_fast32_t       key;
+	struct ev_ast_node  data;
+	struct dictnode    *p_children[DICTNODE_NUM];
+};
+
+static size_t hashfnv(const char *p_str, uint_fast32_t *p_hash) {
+	uint_fast32_t hash = 2166136261;
+	uint_fast32_t c;
+	size_t        length = 0;
+	while ((c = p_str[length++]) != 0)
+		hash = ((hash ^ c) * 16777619) & 0xFFFFFFFFu;
+	*p_hash = hash;
+	return length;
+}
+
 struct token;
 
 struct tok_def {
@@ -141,7 +162,6 @@ struct token {
 
 #define TOK_DECL(name_, precedence_, right_associative_, binop_ast_cls_) \
 	static const struct tok_def name_ = {#name_, precedence_, right_associative_, binop_ast_cls_}
-
 
 static void debug_print_null(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
 	fprintf(p_f, "%*s%s\n", depth, "", p_node->cls->p_name);
@@ -208,7 +228,6 @@ static void debug_print_map(const struct ast_node *p_node, FILE *p_f, unsigned d
 	p_node->d.map.p_function->cls->debug_print(p_node->d.map.p_function, p_f, depth + 1);
 	p_node->d.map.p_input_list->cls->debug_print(p_node->d.map.p_input_list, p_f, depth + 1);
 }
-
 static void debug_list_generator(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
 	fprintf(p_f, "%*s%s\n", depth, "", p_node->cls->p_name);
 	/* TODO */
@@ -1008,19 +1027,7 @@ struct lrange {
 	long long numel;
 };
 
-static int get_range_list_element_fn(struct jnode *p_dest, void *ctx, struct linear_allocator *p_alloc, unsigned idx) {
-	struct lrange *lrange = ctx;
-	if (idx < 0 || (long)idx > lrange->numel)
-		return -1;
-	p_dest->cls = JNODE_CLS_INTEGER;
-	p_dest->d.int_bool = lrange->first + lrange->step_size * (long)idx;
-	return 0;
-}
-
 int ast_list_generator_get_element(struct ev_ast_node *p_dest, const struct ev_ast_node *p_list, unsigned element, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler) {
-	struct ev_ast_node idx;
-	size_t             save;
-
 	assert(p_list->data.cls == &AST_CLS_LIST_GENERATOR);
 
 	if (element >= p_list->data.d.lgen.nb_elements)
@@ -1153,8 +1160,6 @@ int evaluate_ast(struct ev_ast_node *p_result, const struct ev_ast_node *p_src, 
 			return ejson_error(p_error_handler, "couldn't evaluate listval list expression\n");
 
 		if (list.data.cls == &AST_CLS_LIST_GENERATOR) {
-			struct ast_node **pp_stack2;
-
 			if (list.data.d.lgen.get_element(p_result, &list, idx.data.d.i, p_alloc, p_error_handler))
 				return ejson_error(p_error_handler, "could not get element\n");
 
@@ -1294,7 +1299,7 @@ int evaluate_ast(struct ev_ast_node *p_result, const struct ev_ast_node *p_src, 
 	}
 
 	if (p_src->data.cls == &AST_CLS_MAP) {
-		struct ev_ast_node function, list, tmp;
+		struct ev_ast_node function, list, tmp = *p_src;
 
 		tmp.data = *(p_src->data.d.map.p_function);
 		if (evaluate_ast(&function, &tmp, p_alloc, p_error_handler) || function.data.cls != &AST_CLS_FUNCTION || function.data.d.fn.nb_args != 1)

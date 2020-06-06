@@ -12,7 +12,6 @@ struct are_different_enum_state {
 static int are_different_jdict_enumerate(struct jnode *p_node, const char *p_key, void *p_userctx) {
 	struct are_different_enum_state *p_s = p_userctx;
 	struct jnode othernode;
-	int ret;
 	assert(p_s->p_other->cls == JNODE_CLS_DICT);
 	p_s->ret = p_s->p_other->d.dict.get_by_key(&othernode, p_s->p_other->d.dict.ctx, p_s->p_alloc, p_key);
 	if (p_s->ret)
@@ -77,7 +76,6 @@ struct jnodeenum_state {
 };
 
 static int jnode_print_jdict_enumerate(struct jnode *p_dest, const char *p_key, void *p_userctx) {
-	struct jnode tmp;
 	struct jnodeenum_state *p_s = p_userctx;
 	if (p_s->has_printed_something)
 		printf("%*s,", p_s->indent, "");
@@ -126,7 +124,6 @@ int jnode_print(struct jnode *p_root, struct linear_allocator *p_alloc, unsigned
 		if (p_root->d.dict.nb_keys == 0) {
 			printf("{}\n");
 		} else {
-			unsigned i;
 			printf("{");
 			struct jnodeenum_state jes;
 			jes.indent = indent;
