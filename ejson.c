@@ -90,8 +90,7 @@ struct ast_node {
 		} fn; /* AST_CLS_FUNCTION */
 		struct {
 			struct ast_node  *fn;
-			struct ast_node **pp_args;
-			unsigned          nb_args;
+			struct ast_node  *p_args;
 		} call;
 		struct {
 			unsigned          nb_args;
@@ -225,8 +224,7 @@ static void debug_print_call(const struct ast_node *p_node, FILE *p_f, unsigned 
 	unsigned i;
 	fprintf(p_f, "%*s%s\n", depth, "", p_node->cls->p_name);
 	p_node->d.call.fn->cls->debug_print(p_node->d.call.fn, p_f, depth + 1);
-	for (i = 0; i < p_node->d.call.nb_args; i++)
-		p_node->d.call.pp_args[i]->cls->debug_print(p_node->d.call.pp_args[i], p_f, depth + 1);
+	p_node->d.call.p_args->cls->debug_print(p_node->d.call.p_args, p_f, depth + 1);
 }
 static void debug_print_listval(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
 	fprintf(p_f, "%*s%s\n", depth, "", p_node->cls->p_name);
@@ -892,48 +890,12 @@ struct ast_node *parse_primary(struct evaluation_context *p_workspace, struct to
 			fprintf(stderr, "expected function expression\n");
 			return NULL;
 		}
-		if (p_tokeniser->cur.cls != &TOK_LSQBR) {
-			fprintf(stderr, "expected [\n");
+
+		p_ret->d.call.p_args  = expect_expression(p_workspace, p_tokeniser);
+		if (p_ret->d.call.p_args == NULL) {
+			fprintf(stderr, "expected argument expression\n");
 			return NULL;
 		}
-		if (tokeniser_next(p_tokeniser)) {
-			fprintf(stderr, "expected identifier\n");
-			return NULL;
-		}
-
-		if (p_tokeniser->cur.cls != &TOK_RSQBR) {
-			do {
-				p_temp_nodes[nb_args] = expect_expression(p_workspace, p_tokeniser);
-				if (p_temp_nodes[nb_args] == NULL)
-					return NULL;
-				nb_args++;
-				if (p_tokeniser->cur.cls == &TOK_RSQBR)
-					break;
-				if (p_tokeniser->cur.cls != &TOK_COMMA) {
-					fprintf(stderr, "expected , or ]\n");
-					return NULL;
-				}
-				if (tokeniser_next(p_tokeniser)) {
-					fprintf(stderr, "expected another token\n");
-					return NULL;
-				}
-			} while (1);
-		}
-
-		if (tokeniser_next(p_tokeniser)) {
-			fprintf(stderr, "expected identifier\n");
-			return NULL;
-		}
-
-		if (nb_args) {
-			if ((p_ret->d.call.pp_args = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node *) * nb_args)) == NULL)
-				return NULL;
-			for (i = 0; i < nb_args; i++) {
-				p_ret->d.call.pp_args[i] = p_temp_nodes[i];
-			}
-		}
-
-		p_ret->d.call.nb_args = nb_args;
 	} else {
 		token_print(&(p_tokeniser->cur));
 		abort();
@@ -1235,38 +1197,52 @@ int evaluate_ast(struct ev_ast_node *p_result, const struct ev_ast_node *p_src, 
 	/* Function call */
 	if (p_src->data.cls == &AST_CLS_CALL) {
 		struct ev_ast_node function;
+		struct ev_ast_node args;
 		struct ev_ast_node tmp;
+		unsigned nb_call_args;
 
 		tmp = *p_src;
 		tmp.data = *(p_src->data.d.call.fn);
-
 		if (evaluate_ast(&function, &tmp, p_alloc, p_error_handler) || function.data.cls != &AST_CLS_FUNCTION)
 			return ejson_error(p_error_handler, "call expects a function\n");
 
-		if (p_src->data.d.call.nb_args != function.data.d.fn.nb_args)
-			return ejson_error(p_error_handler, "function supplied with incorrect number of arguments (call=%u,fn=%u)\n", p_src->data.d.call.nb_args, function.data.d.fn.nb_args);
+		tmp.data = *(p_src->data.d.call.p_args);
+		if (evaluate_ast(&args, &tmp, p_alloc, p_error_handler) || (args.data.cls != &AST_CLS_LITERAL_LIST && args.data.cls != &AST_CLS_LIST_GENERATOR))
+			return ejson_error(p_error_handler, "call expects the arguments to evaluate to a list\n");
 
-		if (p_src->data.d.call.nb_args) {
+		nb_call_args = (args.data.cls == &AST_CLS_LITERAL_LIST) ? args.data.d.llist.nb_elements : args.data.d.lgen.nb_elements;
+
+		if (nb_call_args != function.data.d.fn.nb_args)
+			return ejson_error(p_error_handler, "function supplied with incorrect number of arguments (call=%u,fn=%u)\n", nb_call_args, function.data.d.fn.nb_args);
+
+		if (nb_call_args) {
 			unsigned i;
 			struct ev_ast_node **pp_stack2;
-			tmp = function;
+			tmp = args;
 
-			if ((pp_stack2 = linear_allocator_alloc(p_alloc, sizeof(struct ev_ast_node *) * (function.stack_size + p_src->data.d.call.nb_args))) == NULL)
+			if ((pp_stack2 = linear_allocator_alloc(p_alloc, sizeof(struct ev_ast_node *) * (function.stack_size + nb_call_args))) == NULL)
 				return ejson_error(p_error_handler, "oom\n");
 
 			if (function.stack_size)
 				memcpy(pp_stack2, function.pp_stack, function.stack_size * sizeof(struct ev_ast_node *));
 
-			for (i = 0; i < p_src->data.d.call.nb_args; i++) {
-				if ((pp_stack2[function.stack_size + p_src->data.d.call.nb_args - 1 - i] = linear_allocator_alloc(p_alloc, sizeof(struct ev_ast_node))) == NULL)
+			for (i = 0; i < nb_call_args; i++) {
+				if ((pp_stack2[function.stack_size + nb_call_args - 1 - i] = linear_allocator_alloc(p_alloc, sizeof(struct ev_ast_node))) == NULL)
 					return ejson_error(p_error_handler, "oom\n");
-				tmp.data = *(p_src->data.d.call.pp_args[i]);
-				if (evaluate_ast(pp_stack2[function.stack_size + p_src->data.d.call.nb_args - 1 - i], &tmp, p_alloc, p_error_handler))
-					return ejson_error(p_error_handler, "failed to eval argument\n");
+
+				if (args.data.cls == &AST_CLS_LITERAL_LIST) {
+					tmp.data = *(args.data.d.llist.elements[i]);
+					if (evaluate_ast(pp_stack2[function.stack_size + nb_call_args - 1 - i], &tmp, p_alloc, p_error_handler))
+						return ejson_error(p_error_handler, "failed to eval argument\n");
+				} else {
+					if (args.data.d.lgen.get_element(pp_stack2[function.stack_size + nb_call_args - 1 - i], &args, i, p_alloc, p_error_handler))
+						return ejson_error(p_error_handler, "failed to eval argument\n");
+				}
+
 			}
 
 			function.pp_stack    = pp_stack2;
-			function.stack_size += p_src->data.d.call.nb_args;
+			function.stack_size += nb_call_args;
 		}
 
 		function.data = *(function.data.d.fn.node);
@@ -1871,6 +1847,18 @@ int main(int argc, char *argv[]) {
 		,"[1, 50, 2, 3]"
 		,"a function that returns a 4 element list with the second element "
 		 "equal to the argument"
+		);
+	run_test
+		("call func(x, y, z) x * y + z call func(x) [3, 5, x] [7]"
+		,"22"
+		,"calling a function where the arguments are the list produced by "
+		 "calling another function"
+		);
+	run_test
+		("call func(x, y, z) x * y + z range(4, 6)"
+		,"26"
+		,"calling a function where the arguments are the list produced by "
+		 "calling range"
 		);
 	run_test
 		("listval call func(x) [1, x, 2, 3] [50] 1"
