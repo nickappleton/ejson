@@ -13,6 +13,9 @@
 
 struct jnode;
 
+/* return < 0 to signal termination due to error
+ * return > 0 to signal graceful termination
+ * return 0 to continue enumerating */
 typedef int (jdict_enumerate_fn)(struct jnode *p_dest, const char *p_key, void *p_userctx);
 
 struct jnode {

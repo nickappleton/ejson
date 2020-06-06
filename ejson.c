@@ -110,8 +110,18 @@ struct ast_node {
 
 };
 
+struct dictnode;
+
 struct ev_ast_node {
 	struct ast_node      data;
+
+	union {
+		struct {
+			unsigned         nb_keys;
+			struct dictnode *p_root;
+		} dict;
+
+	} d;
 
 	/* These may be undefined for certain classes of data. */
 	struct ev_ast_node **pp_stack;
@@ -124,9 +134,9 @@ struct ev_ast_node {
 #define DICTNODE_MASK (DICTNODE_NUM - 1u)
 
 struct dictnode {
-	uint_fast32_t       key;
-	struct ev_ast_node  data;
+	struct ast_node    *data;
 	struct dictnode    *p_children[DICTNODE_NUM];
+	uint_fast32_t       key;
 };
 
 static size_t hashfnv(const char *p_str, uint_fast32_t *p_hash) {
@@ -1125,9 +1135,52 @@ int evaluate_ast(struct ev_ast_node *p_result, const struct ev_ast_node *p_src, 
 		return 0;
 	}
 
+	if  (p_src->data.cls == &AST_CLS_LITERAL_DICT) {
+		unsigned i;
+
+		struct dictnode *p_root = NULL;
+
+		/* Build the dictionary */
+		for (i = 0; i < p_src->data.d.ldict.nb_keys; i++) {
+			struct dictnode **pp_ipos = &p_root;
+			struct dictnode  *p_iter = *pp_ipos;
+			uint_fast32_t hash, ukey;
+			size_t len;
+
+			struct ev_ast_node key;
+			struct ev_ast_node tmp = *p_src;
+			tmp.data = *(p_src->data.d.ldict.elements[2*i+0]);
+			if (evaluate_ast(&key, &tmp, p_alloc, p_error_handler) || key.data.cls != &AST_CLS_LITERAL_STRING)
+				return ejson_error(p_error_handler, "dictionary keys must evaluate to strings\n");
+			len  = hashfnv(key.data.d.str.p_data, &hash);
+			ukey = hash;
+
+			while (p_iter != NULL) {
+				if (p_iter->key == hash && !strcmp((const char *)(p_iter + 1), key.data.d.str.p_data))
+					return -1;
+				pp_ipos = &(p_iter->p_children[ukey & DICTNODE_MASK]);
+				p_iter = *pp_ipos;
+				ukey >>= DICTNODE_BITS;
+			}
+
+			p_iter       = linear_allocator_alloc(p_alloc, sizeof(struct dictnode) + len + 1);
+			p_iter->data = p_src->data.d.ldict.elements[2*i+1];
+			p_iter->key  = hash;
+			memset(p_iter->p_children, 0, sizeof(p_iter->p_children));
+			memcpy((char *)(p_iter + 1), key.data.d.str.p_data, len + 1);
+			*pp_ipos = p_iter;
+		}
+
+		p_result->data           = p_src->data;
+		p_result->d.dict.nb_keys = p_src->data.d.ldict.nb_keys;
+		p_result->d.dict.p_root  = p_root;
+		p_result->pp_stack       = p_src->pp_stack;
+		p_result->stack_size     = p_src->stack_size;
+		return 0;
+	}
+
 	if  (   p_src->data.cls == &AST_CLS_LIST_GENERATOR
 	    ||  p_src->data.cls == &AST_CLS_LITERAL_LIST
-	    ||  p_src->data.cls == &AST_CLS_LITERAL_DICT
 	    ||  p_src->data.cls == &AST_CLS_FUNCTION
 	    ) {
 		*p_result = *p_src;
@@ -1412,6 +1465,48 @@ static int jnode_list_get_element(struct jnode *p_dest, void *ctx, struct linear
 	return to_jnode(p_dest, &tmp, p_alloc, ec->p_error_handler);
 }
 
+static
+int
+enumerate_dict_keys2
+	(jdict_enumerate_fn         *p_fn
+	,struct ejson_error_handler *p_error_handler
+	,const struct dictnode      *p_node
+	,struct linear_allocator    *p_alloc
+	,void                       *p_userctx
+	,struct ev_ast_node        **pp_stack
+	,unsigned                    stack_size
+	) {
+	unsigned i;
+	struct jnode tmp;
+	struct ev_ast_node tmp_dst, tmp_src;
+	for (i = 0; i < DICTNODE_NUM; i++) {
+		if (p_node->p_children[i] != NULL) {
+			int r;
+			if ((r = enumerate_dict_keys2(p_fn, p_error_handler, p_node->p_children[i], p_alloc, p_userctx, pp_stack, stack_size)) != 0) {
+				return r;
+			}
+		}
+	}
+	tmp_src.stack_size = stack_size;
+	tmp_src.pp_stack   = pp_stack;
+	tmp_src.data       = *(p_node->data);
+	if (evaluate_ast(&tmp_dst, &tmp_src, p_alloc, p_error_handler))
+		return ejson_error(p_error_handler, "could not evaluate dictionary data\n");
+
+	if (to_jnode(&tmp, &tmp_dst, p_alloc, p_error_handler))
+		return ejson_error(p_error_handler, "could not convert dictionary data\n");
+
+	return p_fn(&tmp, (const char *)(p_node + 1), p_userctx);
+}
+
+static int enumerate_dict_keys(jdict_enumerate_fn *p_fn, void *p_ctx, struct linear_allocator *p_alloc, void *p_userctx) {
+	struct execution_context *ec = p_ctx;
+	if (ec->object.d.dict.p_root != NULL)
+		return enumerate_dict_keys2(p_fn, ec->p_error_handler, ec->object.d.dict.p_root, p_alloc, p_userctx, ec->object.pp_stack, ec->object.stack_size);
+	return 0;
+}
+
+
 static int to_jnode(struct jnode *p_node, struct ev_ast_node *p_src, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler) {
 	struct ev_ast_node ast;
 
@@ -1447,6 +1542,19 @@ static int to_jnode(struct jnode *p_node, struct ev_ast_node *p_src, struct line
 	if (ast.data.cls == &AST_CLS_LITERAL_BOOL) {
 		p_node->cls        = JNODE_CLS_BOOL;
 		p_node->d.int_bool = ast.data.d.i;
+		return 0;
+	}
+
+	if (ast.data.cls == &AST_CLS_LITERAL_DICT) {
+		struct execution_context *ec = linear_allocator_alloc(p_alloc, sizeof(struct execution_context));
+		ec->p_error_handler = p_error_handler;
+		ec->object          = ast;
+
+		p_node->cls               = JNODE_CLS_DICT;
+		p_node->d.dict.nb_keys    = ast.d.dict.nb_keys;
+		p_node->d.dict.ctx        = ec;
+		p_node->d.dict.get_by_key = NULL; /* TODO */
+		p_node->d.dict.enumerate  = enumerate_dict_keys;
 		return 0;
 	}
 
@@ -1566,7 +1674,7 @@ int run_test(const char *p_ejson, const char *p_ref, const char *p_name) {
 	if (parse_document(&dut, &ws, &t, &err))
 		return (fprintf(stderr, "could not parse dut:\n  %s\n", p_ejson), -1);
 
-	if ((d = are_different(&ref, &dut, &a3)) < 0) {
+	if ((d = are_different(&dut, &ref, &a3)) < 0) {
 		return unexpected_fail("are_different failed to execute\n");
 	}
 	
@@ -1628,6 +1736,21 @@ int main(int argc, char *argv[]) {
 		("[]"
 		,"[]"
 		,"empty list"
+		);
+	run_test
+		("{}"
+		,"{}"
+		,"empty dictionary"
+		);
+	run_test
+		("{\"hello1\": null}"
+		,"{\"hello1\": null}"
+		,"dictionary with a single null key"
+		);
+	run_test
+		("{\"hello1\": {\"uhh\": null, \"thing\": 100}}"
+		,"{\"hello1\": {\"uhh\": null, \"thing\": 100}}"
+		,"dictionary nesting"
 		);
 	run_test
 		("[1,-2,3.4,-4.5,5.6e2,-7.8e-2]"
@@ -1768,6 +1891,20 @@ int main(int argc, char *argv[]) {
 		("map func(x) range(x) range(0,5)"
 		,"[[],[0],[0,1],[0,1,2],[0,1,2,3],[0,1,2,3,4]]"
 		,"use map to generate a list of incrementing ranges over a range"
+		);
+
+	/* FIXME: something is broken i think with the test comparison function. */
+	run_test
+		("define notes=[\"a\",\"b\",\"c\"];"
+		 "map func(x) {\"name\": listval notes x%3, \"id\": x} range(0,5)"
+		,"[{\"id\":0,\"name\":\"a\"}"
+		 ",{\"id\":1,\"name\":\"b\"}"
+		 ",{\"id\":2,\"name\":\"c\"}"
+		 ",{\"id\":3,\"name\":\"a\"}"
+		 ",{\"id\":4,\"name\":\"b\"}"
+		 ",{\"id\":2,\"name\":\"c\"}"
+		 "]"
+		,"use map to generate a list of dicts"
 		);
 
 	//run_test("{}", "{}", "empty dict");
