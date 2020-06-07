@@ -1076,18 +1076,44 @@ const struct ev_ast_node *evaluate_ast(const struct ev_ast_node *p_src, struct l
 		argidx = 1;
 		while ((c = *cp++) != '\0') {
 			if (c == '%') {
+				char fmtspec[32];
+				unsigned specpos = 1;
+				fmtspec[0] = '%';
+
 				c = *cp++;
+				while (c != '\0' && c != 's' && c != 'd' && c != '%') {
+					if (c > '0' && c <= '9') {
+						do {
+							fmtspec[specpos++] = c;
+							c = *cp++;
+						} while (c >= '0' && c <= '9');
+						break;
+					}
+					if (c == '+' || c == '-' || c == '0') {
+						fmtspec[specpos++] = c;
+					} else {
+						return (ejson_error(p_error_handler, "unsupported format flag '%c'\n", c), NULL);
+					}
+					c = *cp++;
+				}
+
 				if (c == '%') {
 					strbuf[i] = c;
 					i++;
 				} else if (c == 'd') {
 					const struct ev_ast_node *p_argval;
-					long long v;
+					unsigned j;
+					int len;
+					char buf[32];
 					if (argidx >= p_args->d.lgen.nb_elements)
 						return (ejson_error(p_error_handler, "not enough arguments given to format\n"), NULL);
 					if ((p_argval = p_args->d.lgen.get_element(p_args, argidx++, p_alloc, p_error_handler)) == NULL || p_argval->data.cls != &AST_CLS_LITERAL_INT)
 						return (ejson_error(p_error_handler, "%%d expects an integer argument\n"), NULL);
-					i += sprintf(&(strbuf[i]), "%lld", p_argval->data.d.i);
+					fmtspec[specpos++] = 'l';
+					fmtspec[specpos++] = 'l';
+					fmtspec[specpos++] = 'd';
+					fmtspec[specpos++] = '\0';
+					i += sprintf(&(strbuf[i]), fmtspec, p_argval->data.d.i);
 				} else if (c == 's') {
 					const struct ev_ast_node *p_argval;
 					if (argidx >= p_args->d.lgen.nb_elements)
@@ -1939,8 +1965,8 @@ int main(int argc, char *argv[]) {
 		,"test format with an integer and string argument"
 		);
 	run_test
-		("map func(x) format[\"%d-%s.wav\", x, listval [\"c\", \"d\", \"e\"] x%3] range[36,40]"
-		,"[\"36-c.wav\", \"37-d.wav\", \"38-e.wav\", \"39-c.wav\", \"40-d.wav\"]"
+		("map func(x) format[\"%03d-%s.wav\", x, listval [\"c\", \"d\", \"e\"] x%3] range[36,40]"
+		,"[\"036-c.wav\", \"037-d.wav\", \"038-e.wav\", \"039-c.wav\", \"040-d.wav\"]"
 		,"test using format to generate mapped strings"
 		);
 	run_test
