@@ -53,39 +53,39 @@ struct ast_node {
 			const char      *p_data;
 		} str; /* AST_CLS_LITERAL_STRING */
 		struct {
-			struct ast_node *p_lhs;
-			struct ast_node *p_rhs;
+			const struct ast_node *p_lhs;
+			const struct ast_node *p_rhs;
 		} binop; /* AST_CLS_STRCAT, AST_CLS_NEG*, AST_CLS_ADD*, AST_CLS_SUB*, AST_CLS_MUL*, AST_CLS_DIV*, AST_CLS_MOD* */
 		struct {
-			struct ast_node **elements;
+			const struct ast_node **elements;
 			uint_fast32_t     nb_elements;
 		} llist; /* AST_CLS_LITERAL_LIST */
 		struct {
-			struct ast_node **elements; /* 2*nb_keys - [key, value] */
+			const struct ast_node **elements; /* 2*nb_keys - [key, value] */
 			uint_fast32_t     nb_keys;
 		} ldict; /* AST_CLS_LITERAL_DICT */
 		struct {
-			struct ast_node  *p_function;
-			struct ast_node  *p_list;
+			const struct ast_node  *p_function;
+			const struct ast_node  *p_list;
 		} lmap;
 		struct {
-			struct ast_node *node;
+			const struct ast_node *node;
 			unsigned         nb_args;
 		} fn; /* AST_CLS_FUNCTION */
 		struct {
-			struct ast_node  *fn;
-			struct ast_node  *p_args;
+			const struct ast_node  *fn;
+			const struct ast_node  *p_args;
 		} call;
 		struct {
-			struct ast_node  *p_args;
+			const struct ast_node  *p_args;
 		} builtin; /* AST_CLS_RANGE */
 		struct {
-			struct ast_node *p_function;
-			struct ast_node *p_input_list;
+			const struct ast_node *p_function;
+			const struct ast_node *p_input_list;
 		} map;
 		struct {
-			struct ast_node *p_list;
-			struct ast_node *p_index;
+			const struct ast_node *p_list;
+			const struct ast_node *p_index;
 		} listval;
 
 	} d;
@@ -114,7 +114,7 @@ struct ev_ast_node {
 					struct ev_ast_node *p_key;
 				} map;
 				struct {
-					struct ast_node **pp_values;
+					const struct ast_node **pp_values;
 				} literal;
 			} d;
 			uint_fast32_t     nb_elements;
@@ -133,9 +133,9 @@ struct ev_ast_node {
 #define DICTNODE_MASK (DICTNODE_NUM - 1u)
 
 struct dictnode {
-	struct ast_node    *data;
-	struct dictnode    *p_children[DICTNODE_NUM];
-	uint_fast32_t       key;
+	const struct ast_node *data;
+	struct dictnode       *p_children[DICTNODE_NUM];
+	uint_fast32_t          key;
 };
 
 static size_t hashfnv(const char *p_str, uint_fast32_t *p_hash) {
@@ -542,30 +542,50 @@ void evaluation_context_free(struct evaluation_context *p_ctx) {
 	istrings_free(&(p_ctx->strings));
 }
 
-struct ast_node *expect_expression(struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser);
+const struct ast_node *expect_expression(struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser);
 
-struct ast_node *parse_primary(struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser) {
-	struct ast_node *p_temp_nodes[8192];
+const struct ast_node *parse_primary(struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser) {
+	const struct ast_node *p_temp_nodes[8192];
 	struct ast_node *p_ret = NULL;
+
+	if (p_tokeniser->cur.cls == &TOK_LPAREN) {
+		const struct ast_node *p_subexpr;
+		if (tokeniser_next(p_tokeniser)) {
+			fprintf(stderr, "expected another token\n");
+			return NULL;
+		}
+		if ((p_subexpr = expect_expression(p_workspace, p_tokeniser)) == NULL)
+			return NULL;
+		if (p_tokeniser->cur.cls != &TOK_RPAREN) {
+			fprintf(stderr, "expected close parenthesis\n");
+			return NULL;
+		}
+		if (tokeniser_next(p_tokeniser))
+			return NULL;
+		return p_subexpr;
+	}
 
 	if (p_tokeniser->cur.cls == &TOK_IDENTIFIER) {
 		const struct istring *k;
-		void **node;
-		k = istrings_add(&(p_workspace->strings), p_tokeniser->cur.t.strident.str);
-		if (k == NULL) {
+		const struct ast_node **node;
+
+		if ((k = istrings_add(&(p_workspace->strings), p_tokeniser->cur.t.strident.str)) == NULL) {
 			fprintf(stderr, "oom\n");
 			return NULL;
 		}
-		node = pdict_get(&(p_workspace->workspace), (uintptr_t)(k->cstr));
-		if (node == NULL) {
+
+		if ((node = (const struct ast_node **)pdict_get(&(p_workspace->workspace), (uintptr_t)(k->cstr))) == NULL) {
 			fprintf(stderr, "'%s' was not found in the workspace\n", k->cstr);
 			return NULL;
 		}
-		p_ret = *node;
 
 		if (tokeniser_next(p_tokeniser))
 			return NULL;
-	} else if (p_tokeniser->cur.cls == &TOK_LISTVAL) {
+
+		return *node;
+	}
+
+	if (p_tokeniser->cur.cls == &TOK_LISTVAL) {
 		if (tokeniser_next(p_tokeniser))
 			return NULL;
 		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
@@ -605,19 +625,6 @@ struct ast_node *parse_primary(struct evaluation_context *p_workspace, struct to
 		p_ret->d.str.hash   = 0;
 		p_ret->d.str.len    = sl;
 		p_ret->d.str.p_data = p_strbuf;
-		if (tokeniser_next(p_tokeniser))
-			return NULL;
-	} else if (p_tokeniser->cur.cls == &TOK_LPAREN) {
-		if (tokeniser_next(p_tokeniser)) {
-			fprintf(stderr, "expected another token\n");
-			return NULL;
-		}
-		if ((p_ret = expect_expression(p_workspace, p_tokeniser)) == NULL)
-			return NULL;
-		if (p_tokeniser->cur.cls != &TOK_RPAREN) {
-			fprintf(stderr, "expected close parenthesis\n");
-			return NULL;
-		}
 		if (tokeniser_next(p_tokeniser))
 			return NULL;
 	} else if (p_tokeniser->cur.cls == &TOK_LBRACE) {
@@ -706,7 +713,7 @@ struct ast_node *parse_primary(struct evaluation_context *p_workspace, struct to
 		if (tokeniser_next(p_tokeniser))
 			return NULL;
 	} else if (p_tokeniser->cur.cls == &TOK_SUB) {
-		struct ast_node *p_next;
+		const struct ast_node *p_next;
 		if (tokeniser_next(p_tokeniser)) {
 			fprintf(stderr, "expected another token after -\n");
 			return NULL;
@@ -863,12 +870,12 @@ struct ast_node *parse_primary(struct evaluation_context *p_workspace, struct to
 	return p_ret;
 }
 
-struct ast_node *expect_expression_1(struct ast_node *p_lhs, struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser, int min_precedence) {
+const struct ast_node *expect_expression_1(const struct ast_node *p_lhs, struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser, int min_precedence) {
 	while
 	    (   p_tokeniser->cur.cls->precedence > 0 /* lookahead is a binary operator */
 		&&  p_tokeniser->cur.cls->precedence >= min_precedence /* whose precedence is >= min_precedence */
 		) {
-		struct ast_node *p_rhs;
+		const struct ast_node *p_rhs;
 		struct ast_node *p_comb;
 		const struct tok_def *p_op = p_tokeniser->cur.cls;
 
@@ -902,8 +909,8 @@ struct ast_node *expect_expression_1(struct ast_node *p_lhs, struct evaluation_c
 	return p_lhs;
 }
 
-struct ast_node *expect_expression(struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser) {
-	struct ast_node *p_lhs = parse_primary(p_workspace, p_tokeniser);
+const struct ast_node *expect_expression(struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser) {
+	const struct ast_node *p_lhs = parse_primary(p_workspace, p_tokeniser);
 	if (p_lhs == NULL)
 		return NULL;
 	return expect_expression_1(p_lhs, p_workspace, p_tokeniser, 0);
@@ -1072,8 +1079,8 @@ int evaluate_ast(struct ev_ast_node *p_result, const struct ev_ast_node *p_src, 
 
 	/* Convert lists into list generators */
 	if  (p_src->data.cls == &AST_CLS_LITERAL_LIST) {
-		*p_result                                   = *p_src;
-		p_result->data.cls                          = &AST_CLS_LIST_GENERATOR;
+		*p_result                              = *p_src;
+		p_result->data.cls                     = &AST_CLS_LIST_GENERATOR;
 		p_result->d.lgen.nb_elements           = p_src->data.d.llist.nb_elements;
 		p_result->d.lgen.d.literal.pp_values   = p_src->data.d.llist.elements;
 		p_result->d.lgen.get_element           = get_literal_element_fn;
@@ -1531,7 +1538,7 @@ static int to_jnode(struct jnode *p_node, struct ev_ast_node *p_src, struct line
 }
 
 int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser, struct ejson_error_handler *p_error_handler) {
-	struct ast_node *p_obj;
+	const struct ast_node *p_obj;
 	struct ev_ast_node tmp;
 	while (p_tokeniser->cur.cls == &TOK_DEFINE) {
 		const struct istring *p_key;
@@ -1548,7 +1555,7 @@ int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace,
 			return ejson_error(p_error_handler, "expected an expression\n");
 		if (p_tokeniser->cur.cls != &TOK_SEMI || tokeniser_next(p_tokeniser))
 			return ejson_error(p_error_handler, "expected ';'\n");
-		if (pdict_set(&(p_workspace->workspace), (uintptr_t)(p_key->cstr), p_obj))
+		if (pdict_set(&(p_workspace->workspace), (uintptr_t)(p_key->cstr), (void *)p_obj))
 			return ejson_error(p_error_handler, "out of memory\n");
 	}
 	if ((p_obj = expect_expression(p_workspace, p_tokeniser)) == NULL)
