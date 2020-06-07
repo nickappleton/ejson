@@ -258,33 +258,28 @@ DEF_AST_CLS(AST_CLS_CALL,            NULL, debug_print_call);
 DEF_AST_CLS(AST_CLS_LISTVAL,         NULL, debug_print_listval);
 DEF_AST_CLS(AST_CLS_MAP,             NULL, debug_print_map);
 DEF_AST_CLS(AST_CLS_FORMAT,          NULL, debug_print_builtin);
-
-//DEF_AST_CLS(AST_CLS_CALL,            NULL, debug_print_call);
 DEF_AST_CLS(AST_CLS_STACKREF,        NULL, debug_print_int_like);
 DEF_AST_CLS(AST_CLS_LIST_GENERATOR,  NULL, debug_list_generator);
 
-
-#if 0
-#define AST_CLS_REFERENCE      (23) /* Push the segment to the current offset for all sub nodes */
-#define AST_CLS_STACKREF       (24)
-#define AST_CLS_FUNCTION       (25)
-#define AST_CLS_NAMED_FUNCTION (26)
-#define AST_CLS_CALL           (27)
-#endif
-
+/* Numeric literals */
 TOK_DECL(TOK_INT,        -1, 0, NULL); /* 13123 */
 TOK_DECL(TOK_FLOAT,      -1, 0, NULL); /* 13123.0 | .123 */
+
+/* Binary operators */
 TOK_DECL(TOK_ADD,         1, 0, &AST_CLS_ADD); /* + */
 TOK_DECL(TOK_SUB,         1, 0, &AST_CLS_SUB); /* - */
 TOK_DECL(TOK_MUL,         2, 0, &AST_CLS_MUL); /* * */
 TOK_DECL(TOK_DIV,         2, 0, &AST_CLS_DIV); /* / */
 TOK_DECL(TOK_MOD,         2, 0, &AST_CLS_MOD); /* % */
 TOK_DECL(TOK_EXP,         3, 1, &AST_CLS_EXP); /* ^ */
+
+/* String */
 TOK_DECL(TOK_STRING,     -1, 0, NULL); /* "afasfasf" */
+
+/* Keywords */
 TOK_DECL(TOK_NULL,       -1, 0, NULL); /* null */
 TOK_DECL(TOK_TRUE,       -1, 0, NULL); /* true */
 TOK_DECL(TOK_FALSE,      -1, 0, NULL); /* false */
-
 TOK_DECL(TOK_RANGE,      -1, 0, NULL); /* range */
 TOK_DECL(TOK_FUNC,       -1, 0, NULL); /* func */
 TOK_DECL(TOK_CALL,       -1, 0, NULL); /* call */
@@ -292,8 +287,9 @@ TOK_DECL(TOK_DEFINE,     -1, 0, NULL); /* define */
 TOK_DECL(TOK_LISTVAL,    -1, 0, NULL); /* listval */
 TOK_DECL(TOK_MAP,        -1, 0, NULL); /* map */
 TOK_DECL(TOK_FORMAT,     -1, 0, NULL); /* format */
+TOK_DECL(TOK_IDENTIFIER, -1, 0, NULL); /* afasfasf - anything not a keyword */
 
-TOK_DECL(TOK_IDENTIFIER, -1, 0, NULL); /* afasfasf */
+/* Symbols */
 TOK_DECL(TOK_COMMA,      -1, 0, NULL); /* , */
 TOK_DECL(TOK_LBRACE,     -1, 0, NULL); /* { */
 TOK_DECL(TOK_RBRACE,     -1, 0, NULL); /* } */
@@ -456,62 +452,34 @@ int tokeniser_next(struct tokeniser *p_tokeniser) {
 		}
 		p_tokeniser->cur.t.strident.str[p_tokeniser->cur.t.strident.len] = '\0';
 
-		if (!strcmp(p_tokeniser->cur.t.strident.str, "true")) {
-			p_tokeniser->cur.cls = &TOK_TRUE;
-		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "false")) {
-			p_tokeniser->cur.cls = &TOK_FALSE;
-		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "null")) {
-			p_tokeniser->cur.cls = &TOK_NULL;
-		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "range")) {
-			p_tokeniser->cur.cls = &TOK_RANGE;
-		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "call")) {
-			p_tokeniser->cur.cls = &TOK_CALL;
-		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "func")) {
-			p_tokeniser->cur.cls = &TOK_FUNC;
-		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "define")) {
-			p_tokeniser->cur.cls = &TOK_DEFINE;
-		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "listval")) {
-			p_tokeniser->cur.cls = &TOK_LISTVAL;
-		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "map")) {
-			p_tokeniser->cur.cls = &TOK_MAP;
-		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "format")) {
-			p_tokeniser->cur.cls = &TOK_FORMAT;
-		} else {
-			p_tokeniser->cur.cls = &TOK_IDENTIFIER;
-		}
+		if (!strcmp(p_tokeniser->cur.t.strident.str, "true")) { p_tokeniser->cur.cls = &TOK_TRUE;
+		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "false")) { p_tokeniser->cur.cls = &TOK_FALSE;
+		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "null")) { p_tokeniser->cur.cls = &TOK_NULL;
+		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "range")) { p_tokeniser->cur.cls = &TOK_RANGE;
+		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "call")) { p_tokeniser->cur.cls = &TOK_CALL;
+		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "func")) { p_tokeniser->cur.cls = &TOK_FUNC;
+		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "define")) { p_tokeniser->cur.cls = &TOK_DEFINE;
+		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "listval")) { p_tokeniser->cur.cls = &TOK_LISTVAL;
+		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "map")) { p_tokeniser->cur.cls = &TOK_MAP;
+		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "format")) { p_tokeniser->cur.cls = &TOK_FORMAT;
+		} else { p_tokeniser->cur.cls = &TOK_IDENTIFIER; }
 
-	} else if (c == '=') {
-		p_tokeniser->cur.cls = &TOK_EQ;
-	} else if (c == '[') {
-		p_tokeniser->cur.cls = &TOK_LSQBR;
-	} else if (c == ']') {
-		p_tokeniser->cur.cls = &TOK_RSQBR;
-	} else if (c == '{') {
-		p_tokeniser->cur.cls = &TOK_LBRACE;
-	} else if (c == '}') {
-		p_tokeniser->cur.cls = &TOK_RBRACE;
-	} else if (c == '(') {
-		p_tokeniser->cur.cls = &TOK_LPAREN;
-	} else if (c == ')') {
-		p_tokeniser->cur.cls = &TOK_RPAREN;
-	} else if (c == ',') {
-		p_tokeniser->cur.cls = &TOK_COMMA;
-	} else if (c == ':') {
-		p_tokeniser->cur.cls = &TOK_COLON;
-	} else if (c == ';') {
-		p_tokeniser->cur.cls = &TOK_SEMI;
-	} else if (c == '%') {
-		p_tokeniser->cur.cls = &TOK_MOD;
-	} else if (c == '/') {
-		p_tokeniser->cur.cls = &TOK_DIV;
-	} else if (c == '*') {
-		p_tokeniser->cur.cls = &TOK_MUL;
-	} else if (c == '^') {
-		p_tokeniser->cur.cls = &TOK_EXP;
-	} else if (c == '-') {
-		p_tokeniser->cur.cls = &TOK_SUB;
-	} else if (c == '+') {
-		p_tokeniser->cur.cls = &TOK_ADD;
+	} else if (c == '=') { p_tokeniser->cur.cls = &TOK_EQ;
+	} else if (c == '[') { p_tokeniser->cur.cls = &TOK_LSQBR;
+	} else if (c == ']') { p_tokeniser->cur.cls = &TOK_RSQBR;
+	} else if (c == '{') { p_tokeniser->cur.cls = &TOK_LBRACE;
+	} else if (c == '}') { p_tokeniser->cur.cls = &TOK_RBRACE;
+	} else if (c == '(') { p_tokeniser->cur.cls = &TOK_LPAREN;
+	} else if (c == ')') { p_tokeniser->cur.cls = &TOK_RPAREN;
+	} else if (c == ',') { p_tokeniser->cur.cls = &TOK_COMMA;
+	} else if (c == ':') { p_tokeniser->cur.cls = &TOK_COLON;
+	} else if (c == ';') { p_tokeniser->cur.cls = &TOK_SEMI;
+	} else if (c == '%') { p_tokeniser->cur.cls = &TOK_MOD;
+	} else if (c == '/') { p_tokeniser->cur.cls = &TOK_DIV;
+	} else if (c == '*') { p_tokeniser->cur.cls = &TOK_MUL;
+	} else if (c == '^') { p_tokeniser->cur.cls = &TOK_EXP;
+	} else if (c == '-') { p_tokeniser->cur.cls = &TOK_SUB;
+	} else if (c == '+') { p_tokeniser->cur.cls = &TOK_ADD;
 	} else {
 		printf("TOKENISATION ERROR %c\n", c);
 		return -1;
