@@ -133,9 +133,9 @@ struct ev_ast_node {
 #define DICTNODE_MASK (DICTNODE_NUM - 1u)
 
 struct dictnode {
-	const struct ast_node *data;
-	struct dictnode       *p_children[DICTNODE_NUM];
-	uint_fast32_t          key;
+	const struct ev_ast_node *data2;
+	struct dictnode          *p_children[DICTNODE_NUM];
+	uint_fast32_t             key;
 };
 
 static size_t hashfnv(const char *p_str, uint_fast32_t *p_hash) {
@@ -1156,17 +1156,16 @@ const struct ev_ast_node *evaluate_ast(const struct ev_ast_node *p_src, struct l
 			uint_fast32_t hash, ukey;
 			size_t len;
 
-			const struct ev_ast_node *p_key;
+			const struct ev_ast_node *p_key, *p_value;
 			struct ev_ast_node *p_tmp;
 			
 			p_tmp       = get_template(p_alloc, p_src);
 			p_tmp->data = *(p_src->data.d.ldict.elements[2*i+0]);
-
 			if ((p_key = evaluate_ast(p_tmp, p_alloc, p_error_handler)) == NULL || p_key->data.cls != &AST_CLS_LITERAL_STRING)
 				return (ejson_error(p_error_handler, "dictionary keys must evaluate to strings\n"), NULL);
+
 			len  = hashfnv(p_key->data.d.str.p_data, &hash);
 			ukey = hash;
-
 			while (p_iter != NULL) {
 				if (p_iter->key == hash && !strcmp((const char *)(p_iter + 1), p_key->data.d.str.p_data))
 					return NULL;
@@ -1175,11 +1174,17 @@ const struct ev_ast_node *evaluate_ast(const struct ev_ast_node *p_src, struct l
 				ukey >>= DICTNODE_BITS;
 			}
 
+			p_tmp       = get_template(p_alloc, p_src);
+			p_tmp->data = *(p_src->data.d.ldict.elements[2*i+1]);
+			if ((p_value = evaluate_ast(p_tmp, p_alloc, p_error_handler)) == NULL)
+				return (ejson_error(p_error_handler, "could not get dictionary value\n"), NULL);
+
 			p_iter       = linear_allocator_alloc(p_alloc, sizeof(struct dictnode) + len + 1);
-			p_iter->data = p_src->data.d.ldict.elements[2*i+1];
+			p_iter->data2 = p_value;
 			p_iter->key  = hash;
 			memset(p_iter->p_children, 0, sizeof(p_iter->p_children));
 			memcpy((char *)(p_iter + 1), p_key->data.d.str.p_data, len + 1);
+
 			*pp_ipos = p_iter;
 		}
 
@@ -1499,30 +1504,19 @@ enumerate_dict_keys2
 	,const struct dictnode      *p_node
 	,struct linear_allocator    *p_alloc
 	,void                       *p_userctx
-	,const struct ev_ast_node  **pp_stack
-	,unsigned                    stack_size
 	) {
 	unsigned i;
 	struct jnode tmp;
-	struct ev_ast_node *p_tmp_src;
-	const struct ev_ast_node *p_tmp_dst;
 	for (i = 0; i < DICTNODE_NUM; i++) {
 		if (p_node->p_children[i] != NULL) {
 			int r;
-			if ((r = enumerate_dict_keys2(p_fn, p_error_handler, p_node->p_children[i], p_alloc, p_userctx, pp_stack, stack_size)) != 0) {
+			if ((r = enumerate_dict_keys2(p_fn, p_error_handler, p_node->p_children[i], p_alloc, p_userctx)) != 0) {
 				return r;
 			}
 		}
 	}
-	p_tmp_src             = linear_allocator_alloc(p_alloc, sizeof(*p_tmp_src));
-	p_tmp_src->stack_size = stack_size;
-	p_tmp_src->pp_stack   = pp_stack;
-	p_tmp_src->data       = *(p_node->data);
 
-	if ((p_tmp_dst = evaluate_ast(p_tmp_src, p_alloc, p_error_handler)) == NULL)
-		return ejson_error(p_error_handler, "could not evaluate dictionary data\n");
-
-	if (to_jnode(&tmp, p_tmp_dst, p_alloc, p_error_handler))
+	if (to_jnode(&tmp, p_node->data2, p_alloc, p_error_handler))
 		return ejson_error(p_error_handler, "could not convert dictionary data\n");
 
 	return p_fn(&tmp, (const char *)(p_node + 1), p_userctx);
@@ -1531,7 +1525,7 @@ enumerate_dict_keys2
 static int enumerate_dict_keys(jdict_enumerate_fn *p_fn, void *p_ctx, struct linear_allocator *p_alloc, void *p_userctx) {
 	struct execution_context *ec = p_ctx;
 	if (ec->p_object->d.dict.p_root != NULL)
-		return enumerate_dict_keys2(p_fn, ec->p_error_handler, ec->p_object->d.dict.p_root, p_alloc, p_userctx, ec->p_object->pp_stack, ec->p_object->stack_size);
+		return enumerate_dict_keys2(p_fn, ec->p_error_handler, ec->p_object->d.dict.p_root, p_alloc, p_userctx);
 	return 0;
 }
 
