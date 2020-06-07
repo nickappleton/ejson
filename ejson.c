@@ -58,11 +58,11 @@ struct ast_node {
 		} binop; /* AST_CLS_STRCAT, AST_CLS_NEG*, AST_CLS_ADD*, AST_CLS_SUB*, AST_CLS_MUL*, AST_CLS_DIV*, AST_CLS_MOD* */
 		struct {
 			const struct ast_node **elements;
-			uint_fast32_t     nb_elements;
+			uint_fast32_t           nb_elements;
 		} llist; /* AST_CLS_LITERAL_LIST */
 		struct {
 			const struct ast_node **elements; /* 2*nb_keys - [key, value] */
-			uint_fast32_t     nb_keys;
+			uint_fast32_t           nb_keys;
 		} ldict; /* AST_CLS_LITERAL_DICT */
 		struct {
 			const struct ast_node  *p_function;
@@ -70,7 +70,7 @@ struct ast_node {
 		} lmap;
 		struct {
 			const struct ast_node *node;
-			unsigned         nb_args;
+			unsigned               nb_args;
 		} fn; /* AST_CLS_FUNCTION */
 		struct {
 			const struct ast_node  *fn;
@@ -114,7 +114,7 @@ struct ev_ast_node {
 					const struct ev_ast_node *p_key;
 				} map;
 				struct {
-					const struct ast_node **pp_values;
+					const struct ev_ast_node **pp_values;
 				} literal;
 			} d;
 			uint_fast32_t     nb_elements;
@@ -968,17 +968,12 @@ const struct ev_ast_node *ast_list_generator_get_element(const struct ev_ast_nod
 }
 
 const struct ev_ast_node *get_literal_element_fn(const struct ev_ast_node *p_src, unsigned element, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler) {
-	struct ev_ast_node *p_copy;
-
 	assert(p_src->data.cls == &AST_CLS_LIST_GENERATOR);
 
 	if (element >= p_src->d.lgen.nb_elements)
 		return (ejson_error(p_error_handler, "list index out of bounds\n"), NULL);
 
-	p_copy       = get_template(p_alloc, p_src);
-	p_copy->data = *(p_src->d.lgen.d.literal.pp_values[element]);
-
-	return evaluate_ast(p_copy, p_alloc, p_error_handler);
+	return p_src->d.lgen.d.literal.pp_values[element];
 }
 
 const struct ev_ast_node *ast_list_generator_map(const struct ev_ast_node *p_src, unsigned element, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler) {
@@ -1040,11 +1035,19 @@ const struct ev_ast_node *evaluate_ast(const struct ev_ast_node *p_src, struct l
 
 	/* Convert lists into list generators */
 	if  (p_src->data.cls == &AST_CLS_LITERAL_LIST) {
-		struct ev_ast_node *p_ret           = get_template(p_alloc, p_src);
-		p_ret->data.cls                     = &AST_CLS_LIST_GENERATOR;
-		p_ret->d.lgen.nb_elements           = p_src->data.d.llist.nb_elements;
-		p_ret->d.lgen.d.literal.pp_values   = p_src->data.d.llist.elements;
-		p_ret->d.lgen.get_element           = get_literal_element_fn;
+		struct ev_ast_node        *p_ret   = get_template(p_alloc, p_src);
+		const struct ev_ast_node **pp_list = linear_allocator_alloc(p_alloc, sizeof(struct ev_ast_node *) * p_src->data.d.llist.nb_elements);
+		unsigned                   i;
+		for (i = 0; i < p_src->data.d.llist.nb_elements; i++) {
+			struct ev_ast_node *p_tmp = get_template(p_alloc, p_src);
+			p_tmp->data = *(p_src->data.d.llist.elements[i]);
+			if ((pp_list[i] = evaluate_ast(p_tmp, p_alloc, p_error_handler)) == NULL)
+				return NULL;
+		}
+		p_ret->data.cls                   = &AST_CLS_LIST_GENERATOR;
+		p_ret->d.lgen.nb_elements         = p_src->data.d.llist.nb_elements;
+		p_ret->d.lgen.d.literal.pp_values = pp_list;
+		p_ret->d.lgen.get_element         = get_literal_element_fn;
 		return p_ret;
 	}
 
