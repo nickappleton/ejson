@@ -44,17 +44,18 @@ struct ast_cls {
 
 struct ast_node {
 	const struct ast_cls *cls;
+
 	union {
-		long long     i; /* AST_CLS_LITERAL_INT, AST_CLS_LITERAL_BOOL */
-		double        f; /* AST_CLS_LITERAL_FLOAT */
+		long long                   i; /* AST_CLS_LITERAL_INT, AST_CLS_LITERAL_BOOL */
+		double                      f; /* AST_CLS_LITERAL_FLOAT */
 		struct {
-			uint_fast32_t    len;
-			uint_fast32_t    hash;
-			const char      *p_data;
+			uint_fast32_t           len;
+			uint_fast32_t           hash;
+			const char             *p_data;
 		} str; /* AST_CLS_LITERAL_STRING */
 		struct {
-			const struct ast_node *p_lhs;
-			const struct ast_node *p_rhs;
+			const struct ast_node  *p_lhs;
+			const struct ast_node  *p_rhs;
 		} binop; /* AST_CLS_STRCAT, AST_CLS_NEG*, AST_CLS_ADD*, AST_CLS_SUB*, AST_CLS_MUL*, AST_CLS_DIV*, AST_CLS_MOD* */
 		struct {
 			const struct ast_node **elements;
@@ -69,8 +70,8 @@ struct ast_node {
 			const struct ast_node  *p_list;
 		} lmap;
 		struct {
-			const struct ast_node *node;
-			unsigned               nb_args;
+			const struct ast_node  *node;
+			unsigned                nb_args;
 		} fn; /* AST_CLS_FUNCTION */
 		struct {
 			const struct ast_node  *fn;
@@ -80,12 +81,12 @@ struct ast_node {
 			const struct ast_node  *p_args;
 		} builtin; /* AST_CLS_RANGE */
 		struct {
-			const struct ast_node *p_function;
-			const struct ast_node *p_input_list;
+			const struct ast_node  *p_function;
+			const struct ast_node  *p_input_list;
 		} map;
 		struct {
-			const struct ast_node *p_list;
-			const struct ast_node *p_index;
+			const struct ast_node  *p_list;
+			const struct ast_node  *p_index;
 		} listval;
 
 	} d;
@@ -1515,10 +1516,8 @@ enumerate_dict_keys2
 			}
 		}
 	}
-
 	if (to_jnode(&tmp, p_node->data2, p_alloc, p_error_handler))
 		return ejson_error(p_error_handler, "could not convert dictionary data\n");
-
 	return p_fn(&tmp, (const char *)(p_node + 1), p_userctx);
 }
 
@@ -1528,7 +1527,6 @@ static int enumerate_dict_keys(jdict_enumerate_fn *p_fn, void *p_ctx, struct lin
 		return enumerate_dict_keys2(p_fn, ec->p_error_handler, ec->p_object->d.dict.p_root, p_alloc, p_userctx);
 	return 0;
 }
-
 
 static int to_jnode(struct jnode *p_node, const struct ev_ast_node *p_src, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler) {
 	const struct ev_ast_node *p_ast;
@@ -1579,21 +1577,6 @@ static int to_jnode(struct jnode *p_node, const struct ev_ast_node *p_src, struc
 		p_node->d.dict.get_by_key = NULL; /* TODO */
 		p_node->d.dict.enumerate  = enumerate_dict_keys;
 		return 0;
-	}
-
-	if (p_ast->data.cls == &AST_CLS_LITERAL_LIST) {
-#if 0
-		struct execution_context *ec = linear_allocator_alloc(p_alloc, sizeof(struct execution_context));
-		ec->p_error_handler          = p_error_handler;
-		ec->p_object                 = p_ast;
-		p_node->cls                  = JNODE_CLS_LIST;
-		p_node->d.list.ctx           = ec;
-		p_node->d.list.nb_elements   = p_ast->data.d.llist.nb_elements;
-		p_node->d.list.get_elemenent = get_literal_list_element_fn;
-		return 0;
-#else
-		abort();
-#endif
 	}
 
 	if (p_ast->data.cls == &AST_CLS_LIST_GENERATOR) {
