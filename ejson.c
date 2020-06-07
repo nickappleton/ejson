@@ -257,6 +257,8 @@ DEF_AST_CLS(AST_CLS_FUNCTION,        NULL, debug_print_function);
 DEF_AST_CLS(AST_CLS_CALL,            NULL, debug_print_call);
 DEF_AST_CLS(AST_CLS_LISTVAL,         NULL, debug_print_listval);
 DEF_AST_CLS(AST_CLS_MAP,             NULL, debug_print_map);
+DEF_AST_CLS(AST_CLS_FORMAT,          NULL, debug_print_builtin);
+
 //DEF_AST_CLS(AST_CLS_CALL,            NULL, debug_print_call);
 DEF_AST_CLS(AST_CLS_STACKREF,        NULL, debug_print_int_like);
 DEF_AST_CLS(AST_CLS_LIST_GENERATOR,  NULL, debug_list_generator);
@@ -289,6 +291,7 @@ TOK_DECL(TOK_CALL,       -1, 0, NULL); /* call */
 TOK_DECL(TOK_DEFINE,     -1, 0, NULL); /* define */
 TOK_DECL(TOK_LISTVAL,    -1, 0, NULL); /* listval */
 TOK_DECL(TOK_MAP,        -1, 0, NULL); /* map */
+TOK_DECL(TOK_FORMAT,     -1, 0, NULL); /* format */
 
 TOK_DECL(TOK_IDENTIFIER, -1, 0, NULL); /* afasfasf */
 TOK_DECL(TOK_COMMA,      -1, 0, NULL); /* , */
@@ -302,6 +305,7 @@ TOK_DECL(TOK_EQ,         -1, 0, NULL); /* = */
 TOK_DECL(TOK_COLON,      -1, 0, NULL); /* : */
 TOK_DECL(TOK_SEMI,       -1, 0, NULL); /* ; */
 TOK_DECL(TOK_EOF,        -1, 0, NULL); /* EOF */
+
 
 struct tokeniser {
 	unsigned      lp; /* line position, character position */
@@ -470,6 +474,8 @@ int tokeniser_next(struct tokeniser *p_tokeniser) {
 			p_tokeniser->cur.cls = &TOK_LISTVAL;
 		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "map")) {
 			p_tokeniser->cur.cls = &TOK_MAP;
+		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "format")) {
+			p_tokeniser->cur.cls = &TOK_FORMAT;
 		} else {
 			p_tokeniser->cur.cls = &TOK_IDENTIFIER;
 		}
@@ -744,9 +750,15 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		if (tokeniser_next(p_tokeniser))
 			return NULL;
 	} else if (p_tokeniser->cur.cls == &TOK_RANGE) {
-		uint_fast32_t nb_list = 0;
 		p_ret        = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls   = &AST_CLS_RANGE;
+		if (tokeniser_next(p_tokeniser))
+			return NULL;
+		if ((p_ret->d.builtin.p_args = expect_expression(p_workspace, p_tokeniser)) == NULL)
+			return NULL;
+	} else if (p_tokeniser->cur.cls == &TOK_FORMAT) {
+		p_ret        = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
+		p_ret->cls   = &AST_CLS_FORMAT;
 		if (tokeniser_next(p_tokeniser))
 			return NULL;
 		if ((p_ret->d.builtin.p_args = expect_expression(p_workspace, p_tokeniser)) == NULL)
@@ -1084,6 +1096,69 @@ int evaluate_ast(struct ev_ast_node *p_result, const struct ev_ast_node *p_src, 
 		p_result->d.lgen.nb_elements           = p_src->data.d.llist.nb_elements;
 		p_result->d.lgen.d.literal.pp_values   = p_src->data.d.llist.elements;
 		p_result->d.lgen.get_element           = get_literal_element_fn;
+		return 0;
+	}
+
+	if (p_src->data.cls == &AST_CLS_FORMAT) {
+		char strbuf[8192];
+		unsigned i;
+		unsigned argidx;
+		struct ev_ast_node args;
+		struct ev_ast_node fmtstr;
+		const char *cp;
+		char *ob;
+		char c;
+
+		struct ev_ast_node tmp = *p_src;
+		tmp.data = *(p_src->data.d.builtin.p_args);
+		if (evaluate_ast(&args, &tmp, p_alloc, p_error_handler) || args.data.cls != &AST_CLS_LIST_GENERATOR || args.d.lgen.nb_elements < 1)
+			return ejson_error(p_error_handler, "format expects a list argument with at least a format string\n");
+
+		if (args.d.lgen.get_element(&fmtstr, &args, 0, p_alloc, p_error_handler) || fmtstr.data.cls != &AST_CLS_LITERAL_STRING)
+			return ejson_error(p_error_handler, "first argument of format must be a string\n");
+		
+		cp = fmtstr.data.d.str.p_data;
+		i = 0;
+		argidx = 1;
+		while ((c = *cp++) != '\0') {
+			if (c == '%') {
+				c = *cp++;
+				if (c == '%') {
+					strbuf[i] = c;
+					i++;
+				} else if (c == 'd') {
+					struct ev_ast_node argval;
+					long long v;
+					if (argidx >= args.d.lgen.nb_elements)
+						return ejson_error(p_error_handler, "not enough arguments given to format\n");
+					if (args.d.lgen.get_element(&argval, &args, argidx++, p_alloc, p_error_handler) || argval.data.cls != &AST_CLS_LITERAL_INT)
+						return ejson_error(p_error_handler, "%%d expects an integer argument\n");
+					i += sprintf(&(strbuf[i]), "%lld", argval.data.d.i);
+				} else if (c == 's') {
+					struct ev_ast_node argval;
+					if (argidx >= args.d.lgen.nb_elements)
+						return ejson_error(p_error_handler, "not enough arguments given to format\n");
+					if (args.d.lgen.get_element(&argval, &args, argidx++, p_alloc, p_error_handler) || argval.data.cls != &AST_CLS_LITERAL_STRING)
+						return ejson_error(p_error_handler, "%%s expects a string argument\n");
+					memcpy(&(strbuf[i]), argval.data.d.str.p_data, argval.data.d.str.len);
+					i += argval.data.d.str.len;
+				} else {
+					return ejson_error(p_error_handler, "invalid escape sequence (%%%c)\n", c);
+				}
+			} else {
+				strbuf[i] = c;
+				i++;
+			}
+		}
+		strbuf[i] = '\0';
+
+		ob = linear_allocator_alloc_align(p_alloc, 1, i + 1);
+		memcpy(ob, strbuf, i+1);
+
+		*p_result = *p_src;
+		p_result->data.cls = &AST_CLS_LITERAL_STRING;
+		p_result->data.d.str.p_data = ob;
+		p_result->data.d.str.len    = hashfnv(ob, &(p_result->data.d.str.hash));
 		return 0;
 	}
 
@@ -1858,7 +1933,31 @@ int main(int argc, char *argv[]) {
 		,"[1,3,5,7,9]"
 		,"call range with arguments given by the result of a function call"
 		);
-
+	run_test
+		("format[\"hello\"]"
+		,"\"hello\""
+		,"test format with no arguments"
+		);
+	run_test
+		("format[\"hello %%\"]"
+		,"\"hello %\""
+		,"format escapeing %% properly"
+		);
+	run_test
+		("format[\"hello %d %d\", 1, 2000]"
+		,"\"hello 1 2000\""
+		,"test format with two integer arguments"
+		);
+	run_test
+		("format[\"%d-%s.wav\", 36, \"c\"]"
+		,"\"36-c.wav\""
+		,"test format with an integer and string argument"
+		);
+	run_test
+		("map func(x) format[\"%d-%s.wav\", x, listval [\"c\", \"d\", \"e\"] x%3] range[36,40]"
+		,"[\"36-c.wav\", \"37-d.wav\", \"38-e.wav\", \"39-c.wav\", \"40-d.wav\"]"
+		,"test using format to generate mapped strings"
+		);
 
 	/* FIXME: something is broken i think with the test comparison function. */
 	run_test
