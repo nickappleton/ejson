@@ -1853,6 +1853,11 @@ int main(int argc, char *argv[]) {
 		 "access test)"
 		);
 	run_test
+		("call func(x) call func(y) call func(z) x - y * z [3] [5] [7]"
+		,"-32"
+		,"triple nested function call"
+		);
+	run_test
 		("call func(y) call y [] [func() 111]"
 		,"111"
 		,"calling a function that calls the given function passed as an "
