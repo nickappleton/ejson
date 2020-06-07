@@ -73,6 +73,9 @@ struct ast_node {
 					struct ev_ast_node *p_function;
 					struct ev_ast_node *p_key;
 				} map;
+				struct {
+					struct ast_node **pp_values;
+				} literal;
 			} d;
 			uint_fast32_t     nb_elements;
 		} lgen; /* AST_CLS_LIST_GENERATOR */
@@ -1012,8 +1015,24 @@ int ast_list_generator_get_element(struct ev_ast_node *p_dest, const struct ev_a
 	return 0;
 }
 
+static int get_literal_element_fn(struct ev_ast_node *p_dest, const struct ev_ast_node *p_src, unsigned element, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler) {
+	struct ev_ast_node tmp;
 
-int ast_list_generator_map(struct ev_ast_node *p_dest, const struct ev_ast_node *p_src, unsigned element, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler) {
+	assert(p_src->data.cls == &AST_CLS_LIST_GENERATOR);
+
+	if (element >= p_src->data.d.lgen.nb_elements)
+		return ejson_error(p_error_handler, "list index out of bounds\n");
+
+	tmp      = *p_src;
+	tmp.data = *(p_src->data.d.lgen.d.literal.pp_values[element]);
+
+	if (evaluate_ast(p_dest, &tmp, p_alloc, p_error_handler))
+		return ejson_error(p_error_handler, "could not evaluate list element\n");
+
+	return 0;
+}
+
+static int ast_list_generator_map(struct ev_ast_node *p_dest, const struct ev_ast_node *p_src, unsigned element, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler) {
 	struct ev_ast_node argument, tmp;
 	struct ev_ast_node **pp_tmp;
 	struct ev_ast_node *p_tmp;
@@ -1025,21 +1044,13 @@ int ast_list_generator_map(struct ev_ast_node *p_dest, const struct ev_ast_node 
 	p_function = p_src->data.d.lgen.d.map.p_function;
 	p_list     = p_src->data.d.lgen.d.map.p_key;
 	assert(p_function->data.cls == &AST_CLS_FUNCTION);
-	assert(p_list->data.cls == &AST_CLS_LIST_GENERATOR || p_list->data.cls == &AST_CLS_LITERAL_LIST);
+	assert(p_list->data.cls == &AST_CLS_LIST_GENERATOR);
 
-	if (p_list->data.cls == &AST_CLS_LITERAL_LIST) {
-		if (element >= p_list->data.d.llist.nb_elements)
-			return ejson_error(p_error_handler, "list index out of range\n");
-		tmp      = *p_list;
-		tmp.data = *(p_list->data.d.llist.elements[element]);
-		if (evaluate_ast(&argument, &tmp, p_alloc, p_error_handler))
-			return ejson_error(p_error_handler, "could not get list item\n");
-	} else {
-		if (element >= p_list->data.d.lgen.nb_elements)
-			return ejson_error(p_error_handler, "list index out of range\n");
-		if (p_list->data.d.lgen.get_element(&argument, p_list, element, p_alloc, p_error_handler))
-			return ejson_error(p_error_handler, "could not get list item\n");
-	}
+	if (element >= p_list->data.d.lgen.nb_elements)
+		return ejson_error(p_error_handler, "list index out of range\n");
+
+	if (p_list->data.d.lgen.get_element(&argument, p_list, element, p_alloc, p_error_handler))
+		return ejson_error(p_error_handler, "could not get list item\n");
 
 	if ((pp_tmp = linear_allocator_alloc(p_alloc, sizeof(struct ev_ast_node *) * (p_function->stack_size + 1))) == NULL)
 		return ejson_error(p_error_handler, "oom\n");
@@ -1097,6 +1108,23 @@ int evaluate_ast(struct ev_ast_node *p_result, const struct ev_ast_node *p_src, 
 		return 0;
 	}
 
+	if  (   p_src->data.cls == &AST_CLS_LIST_GENERATOR
+	    ||  p_src->data.cls == &AST_CLS_FUNCTION
+	    ) {
+		*p_result = *p_src;
+		return 0;
+	}
+
+	/* Convert lists into list generators */
+	if  (p_src->data.cls == &AST_CLS_LITERAL_LIST) {
+		*p_result                                   = *p_src;
+		p_result->data.cls                          = &AST_CLS_LIST_GENERATOR;
+		p_result->data.d.lgen.nb_elements           = p_src->data.d.llist.nb_elements;
+		p_result->data.d.lgen.d.literal.pp_values   = p_src->data.d.llist.elements;
+		p_result->data.d.lgen.get_element           = get_literal_element_fn;
+		return 0;
+	}
+
 	if  (p_src->data.cls == &AST_CLS_LITERAL_DICT) {
 		unsigned i;
 
@@ -1141,14 +1169,6 @@ int evaluate_ast(struct ev_ast_node *p_result, const struct ev_ast_node *p_src, 
 		return 0;
 	}
 
-	if  (   p_src->data.cls == &AST_CLS_LIST_GENERATOR
-	    ||  p_src->data.cls == &AST_CLS_LITERAL_LIST
-	    ||  p_src->data.cls == &AST_CLS_FUNCTION
-	    ) {
-		*p_result = *p_src;
-		return 0;
-	}
-
 	if (p_src->data.cls == &AST_CLS_LISTVAL) {
 		struct ev_ast_node list;
 		struct ev_ast_node idx;
@@ -1174,24 +1194,13 @@ int evaluate_ast(struct ev_ast_node *p_result, const struct ev_ast_node *p_src, 
 		if (evaluate_ast(&list, &tmp, p_alloc, p_error_handler))
 			return ejson_error(p_error_handler, "couldn't evaluate listval list expression\n");
 
-		if (list.data.cls == &AST_CLS_LIST_GENERATOR) {
-			if (list.data.d.lgen.get_element(p_result, &list, idx.data.d.i, p_alloc, p_error_handler))
-				return ejson_error(p_error_handler, "could not get element\n");
+		if (list.data.cls != &AST_CLS_LIST_GENERATOR)
+			return ejson_error(p_error_handler, "listval list expression was not a list generator\n");
 
-			return 0;
-		} else if (list.data.cls == &AST_CLS_LITERAL_LIST) {
-			if (idx.data.d.i < 0 || idx.data.d.i >= list.data.d.llist.nb_elements)
-				return ejson_error(p_error_handler, "listval list index was out of bounds\n");
+		if (list.data.d.lgen.get_element(p_result, &list, idx.data.d.i, p_alloc, p_error_handler))
+			return ejson_error(p_error_handler, "could not get element\n");
 
-			list.data = *(list.data.d.llist.elements[idx.data.d.i]);
-
-			if (evaluate_ast(p_result, &list, p_alloc, p_error_handler))
-				return ejson_error(p_error_handler, "could not evaluate list item\n");
-		
-			return 0;
-		}
-
-		return ejson_error(p_error_handler, "listval list expression was not a list\n");
+		return 0;
 	}
 
 	/* Function call */
@@ -1199,7 +1208,6 @@ int evaluate_ast(struct ev_ast_node *p_result, const struct ev_ast_node *p_src, 
 		struct ev_ast_node function;
 		struct ev_ast_node args;
 		struct ev_ast_node tmp;
-		unsigned nb_call_args;
 
 		tmp = *p_src;
 		tmp.data = *(p_src->data.d.call.fn);
@@ -1207,42 +1215,33 @@ int evaluate_ast(struct ev_ast_node *p_result, const struct ev_ast_node *p_src, 
 			return ejson_error(p_error_handler, "call expects a function\n");
 
 		tmp.data = *(p_src->data.d.call.p_args);
-		if (evaluate_ast(&args, &tmp, p_alloc, p_error_handler) || (args.data.cls != &AST_CLS_LITERAL_LIST && args.data.cls != &AST_CLS_LIST_GENERATOR))
+		if (evaluate_ast(&args, &tmp, p_alloc, p_error_handler) || args.data.cls != &AST_CLS_LIST_GENERATOR)
 			return ejson_error(p_error_handler, "call expects the arguments to evaluate to a list\n");
 
-		nb_call_args = (args.data.cls == &AST_CLS_LITERAL_LIST) ? args.data.d.llist.nb_elements : args.data.d.lgen.nb_elements;
+		if (args.data.d.lgen.nb_elements != function.data.d.fn.nb_args)
+			return ejson_error(p_error_handler, "function supplied with incorrect number of arguments (call=%u,fn=%u)\n", args.data.d.lgen.nb_elements, function.data.d.fn.nb_args);
 
-		if (nb_call_args != function.data.d.fn.nb_args)
-			return ejson_error(p_error_handler, "function supplied with incorrect number of arguments (call=%u,fn=%u)\n", nb_call_args, function.data.d.fn.nb_args);
-
-		if (nb_call_args) {
+		if (args.data.d.lgen.nb_elements) {
 			unsigned i;
 			struct ev_ast_node **pp_stack2;
 			tmp = args;
 
-			if ((pp_stack2 = linear_allocator_alloc(p_alloc, sizeof(struct ev_ast_node *) * (function.stack_size + nb_call_args))) == NULL)
+			if ((pp_stack2 = linear_allocator_alloc(p_alloc, sizeof(struct ev_ast_node *) * (function.stack_size + args.data.d.lgen.nb_elements))) == NULL)
 				return ejson_error(p_error_handler, "oom\n");
 
 			if (function.stack_size)
 				memcpy(pp_stack2, function.pp_stack, function.stack_size * sizeof(struct ev_ast_node *));
 
-			for (i = 0; i < nb_call_args; i++) {
-				if ((pp_stack2[function.stack_size + nb_call_args - 1 - i] = linear_allocator_alloc(p_alloc, sizeof(struct ev_ast_node))) == NULL)
+			for (i = 0; i < args.data.d.lgen.nb_elements; i++) {
+				if ((pp_stack2[function.stack_size + args.data.d.lgen.nb_elements - 1 - i] = linear_allocator_alloc(p_alloc, sizeof(struct ev_ast_node))) == NULL)
 					return ejson_error(p_error_handler, "oom\n");
 
-				if (args.data.cls == &AST_CLS_LITERAL_LIST) {
-					tmp.data = *(args.data.d.llist.elements[i]);
-					if (evaluate_ast(pp_stack2[function.stack_size + nb_call_args - 1 - i], &tmp, p_alloc, p_error_handler))
-						return ejson_error(p_error_handler, "failed to eval argument\n");
-				} else {
-					if (args.data.d.lgen.get_element(pp_stack2[function.stack_size + nb_call_args - 1 - i], &args, i, p_alloc, p_error_handler))
-						return ejson_error(p_error_handler, "failed to eval argument\n");
-				}
-
+				if (args.data.d.lgen.get_element(pp_stack2[function.stack_size + args.data.d.lgen.nb_elements - 1 - i], &args, i, p_alloc, p_error_handler))
+					return ejson_error(p_error_handler, "failed to eval argument\n");
 			}
 
 			function.pp_stack    = pp_stack2;
-			function.stack_size += nb_call_args;
+			function.stack_size += args.data.d.lgen.nb_elements;
 		}
 
 		function.data = *(function.data.d.fn.node);
@@ -1335,7 +1334,7 @@ int evaluate_ast(struct ev_ast_node *p_result, const struct ev_ast_node *p_src, 
 			return ejson_error(p_error_handler, "map expects a function argument that takes one argument\n");
 
 		tmp.data = *(p_src->data.d.map.p_input_list);
-		if (evaluate_ast(&list, &tmp, p_alloc, p_error_handler) || (list.data.cls != &AST_CLS_LITERAL_LIST && list.data.cls != &AST_CLS_LIST_GENERATOR))
+		if (evaluate_ast(&list, &tmp, p_alloc, p_error_handler) || list.data.cls != &AST_CLS_LIST_GENERATOR)
 			return ejson_error(p_error_handler, "map expected a list argument following the function\n");
 
 		p_result->pp_stack                        = p_src->pp_stack;
@@ -1346,7 +1345,7 @@ int evaluate_ast(struct ev_ast_node *p_result, const struct ev_ast_node *p_src, 
 		p_result->data.d.lgen.d.map.p_function[0] = function;
 		p_result->data.d.lgen.d.map.p_key[0]      = list;
 		p_result->data.d.lgen.get_element         = ast_list_generator_map;
-		p_result->data.d.lgen.nb_elements         = (list.data.cls == &AST_CLS_LITERAL_LIST) ? list.data.d.llist.nb_elements : list.data.d.lgen.nb_elements;
+		p_result->data.d.lgen.nb_elements         = list.data.d.lgen.nb_elements;
 
 		return 0;
 	}
