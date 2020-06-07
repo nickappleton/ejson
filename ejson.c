@@ -1943,6 +1943,11 @@ int main(int argc, char *argv[]) {
 		,"[\"36-c.wav\", \"37-d.wav\", \"38-e.wav\", \"39-c.wav\", \"40-d.wav\"]"
 		,"test using format to generate mapped strings"
 		);
+	run_test
+		("call listval [func(x) x+1, func(x) x+2, func(x) x+3] 1 [10]"
+		,"12"
+		,"test calling a function that is in a list of cuntions"
+		);
 
 	/* FIXME: something is broken i think with the test comparison function. */
 	run_test
