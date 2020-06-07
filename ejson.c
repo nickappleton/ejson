@@ -96,9 +96,8 @@ struct ast_node {
 			struct ast_node  *p_args;
 		} call;
 		struct {
-			unsigned          nb_args;
-			struct ast_node **pp_args;
-		} builtin;
+			struct ast_node  *p_args;
+		} builtin; /* AST_CLS_RANGE */
 		struct {
 			struct ast_node *p_function;
 			struct ast_node *p_input_list;
@@ -214,17 +213,14 @@ static void debug_print_unop(const struct ast_node *p_node, FILE *p_f, unsigned 
 	p_node->d.binop.p_lhs->cls->debug_print(p_node->d.binop.p_lhs, p_f, depth + 1);
 }
 static void debug_print_builtin(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
-	unsigned i;
 	fprintf(p_f, "%*s%s\n", depth, "", p_node->cls->p_name);
-	for (i = 0; i < p_node->d.builtin.nb_args; i++)
-		p_node->d.builtin.pp_args[i]->cls->debug_print(p_node->d.builtin.pp_args[i], p_f, depth + 1);
+	p_node->d.builtin.p_args->cls->debug_print(p_node->d.builtin.p_args, p_f, depth + 1);
 }
 static void debug_print_function(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
 	fprintf(p_f, "%*s%s(nb_args=%u)\n", depth, "", p_node->cls->p_name, p_node->d.fn.nb_args);
 	p_node->d.fn.node->cls->debug_print(p_node->d.fn.node, p_f, depth + 1);
 }
 static void debug_print_call(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
-	unsigned i;
 	fprintf(p_f, "%*s%s\n", depth, "", p_node->cls->p_name);
 	p_node->d.call.fn->cls->debug_print(p_node->d.call.fn, p_f, depth + 1);
 	p_node->d.call.p_args->cls->debug_print(p_node->d.call.p_args, p_f, depth + 1);
@@ -745,49 +741,10 @@ struct ast_node *parse_primary(struct evaluation_context *p_workspace, struct to
 	} else if (p_tokeniser->cur.cls == &TOK_RANGE) {
 		uint_fast32_t nb_list = 0;
 		p_ret        = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
-		p_ret->cls   = &AST_CLS_LITERAL_NULL;
+		p_ret->cls   = &AST_CLS_RANGE;
 		if (tokeniser_next(p_tokeniser))
 			return NULL;
-		if (p_tokeniser->cur.cls != &TOK_LPAREN) {
-			fprintf(stderr, "expected lparen\n");
-			return NULL;
-		}
-		if (tokeniser_next(p_tokeniser)) {
-			fprintf(stderr, "expected another token\n");
-			return NULL;
-		}
-		if (p_tokeniser->cur.cls != &TOK_RPAREN) {
-			do {
-				p_temp_nodes[nb_list] = expect_expression(p_workspace, p_tokeniser);
-				if (p_temp_nodes[nb_list] == NULL)
-					return NULL;
-				nb_list++;
-				if (p_tokeniser->cur.cls == &TOK_RPAREN)
-					break;
-				if (p_tokeniser->cur.cls != &TOK_COMMA) {
-					fprintf(stderr, "expected , or ]\n");
-					return NULL;
-				}
-				if (tokeniser_next(p_tokeniser)) {
-					fprintf(stderr, "expected another token\n");
-					return NULL;
-				}
-			} while (1);
-		}
-		if (nb_list < 1 || nb_list > 3) {
-			fprintf(stderr, "range expects 1-3 arguments\n");
-			return NULL;
-		}
-		p_ret                    = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
-		p_ret->cls               = &AST_CLS_RANGE;
-		p_ret->d.builtin.nb_args = nb_list;
-		if (nb_list) {
-			p_ret->d.builtin.pp_args = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node *) * nb_list);
-			memcpy(p_ret->d.builtin.pp_args, p_temp_nodes, sizeof(struct ast_node *) * nb_list);
-		} else {
-			p_ret->d.builtin.pp_args = NULL;
-		}
-		if (tokeniser_next(p_tokeniser))
+		if ((p_ret->d.builtin.p_args = expect_expression(p_workspace, p_tokeniser)) == NULL)
 			return NULL;
 	} else if (p_tokeniser->cur.cls == &TOK_FUNC) {
 		unsigned        nb_args = 0;
@@ -1270,7 +1227,7 @@ int evaluate_ast(struct ev_ast_node *p_result, const struct ev_ast_node *p_src, 
 			return 0;
 		}
 
-		return -1;
+		return ejson_error(p_error_handler, "unary negation can only be applied to numeric types\n");
 	}
 
 	/* Convert range into an accessor object */
@@ -1278,36 +1235,48 @@ int evaluate_ast(struct ev_ast_node *p_result, const struct ev_ast_node *p_src, 
 		struct lrange    lrange;
 		size_t save = linear_allocator_save(p_alloc);
 
-		if (p_src->data.d.builtin.nb_args == 1) {
+		struct ev_ast_node args;
+		struct ev_ast_node tmp = *p_src;
+		tmp.data = *(p_src->data.d.builtin.p_args);
+
+		if (evaluate_ast(&args, &tmp, p_alloc, p_error_handler) || args.data.cls != &AST_CLS_LIST_GENERATOR)
+			return ejson_error(p_error_handler, "range expects a list argument\n");
+
+		if (args.data.d.lgen.nb_elements < 1 || args.data.d.lgen.nb_elements > 3)
+			return ejson_error(p_error_handler, "range expects between 1 and 3 arguments\n");
+
+		if (args.data.d.lgen.nb_elements == 1) {
 			struct ev_ast_node numel;
-			struct ev_ast_node tmp = *p_src;
-			if ((tmp.data = *(p_src->data.d.builtin.pp_args[0]), evaluate_ast(&numel, &tmp, p_alloc, p_error_handler)) || numel.data.cls != &AST_CLS_LITERAL_INT)
-				return -1;
+
+			if (args.data.d.lgen.get_element(&numel, &args, 0, p_alloc, p_error_handler) || numel.data.cls != &AST_CLS_LITERAL_INT)
+				return ejson_error(p_error_handler, "single argument range expects an integer number of items\n");
+
 			lrange.first     = 0;
 			lrange.step_size = 1;
 			lrange.numel     = numel.data.d.i;
-		} else if (p_src->data.d.builtin.nb_args == 2) {
+		} else if (args.data.d.lgen.nb_elements == 2) {
 			struct ev_ast_node first, last;
-			struct ev_ast_node tmp = *p_src;
-			if  (   (tmp.data = *(p_src->data.d.builtin.pp_args[0]), evaluate_ast(&first, &tmp, p_alloc, p_error_handler)) || first.data.cls != &AST_CLS_LITERAL_INT
-			    ||  (tmp.data = *(p_src->data.d.builtin.pp_args[1]), evaluate_ast(&last, &tmp, p_alloc, p_error_handler)) || last.data.cls != &AST_CLS_LITERAL_INT
+
+			if  (   args.data.d.lgen.get_element(&first, &args, 0, p_alloc, p_error_handler) || first.data.cls != &AST_CLS_LITERAL_INT
+			    ||  args.data.d.lgen.get_element(&last, &args, 1, p_alloc, p_error_handler) || last.data.cls != &AST_CLS_LITERAL_INT
 			    )
-				return -1;
+				return ejson_error(p_error_handler, "dual argument range expects an integer first and last index\n");
+
 			lrange.first     = first.data.d.i;
 			lrange.step_size = (first.data.d.i > last.data.d.i) ? -1 : 1;
 			lrange.numel     = ((first.data.d.i > last.data.d.i) ? (first.data.d.i - last.data.d.i) : (last.data.d.i - first.data.d.i)) + 1;
 		} else {
 			struct ev_ast_node first, step, last;
-			struct ev_ast_node tmp = *p_src;
-			assert(p_src->data.d.builtin.nb_args == 3);
-			if  (   (tmp.data = *(p_src->data.d.builtin.pp_args[0]), evaluate_ast(&first, &tmp, p_alloc, p_error_handler)) || first.data.cls != &AST_CLS_LITERAL_INT
-			    ||  (tmp.data = *(p_src->data.d.builtin.pp_args[1]), evaluate_ast(&step, &tmp, p_alloc, p_error_handler)) || step.data.cls != &AST_CLS_LITERAL_INT
-			    ||  (tmp.data = *(p_src->data.d.builtin.pp_args[2]), evaluate_ast(&last, &tmp, p_alloc, p_error_handler)) || last.data.cls != &AST_CLS_LITERAL_INT
+
+			if  (   args.data.d.lgen.get_element(&first, &args, 0, p_alloc, p_error_handler) || first.data.cls != &AST_CLS_LITERAL_INT
+			    ||  args.data.d.lgen.get_element(&step, &args, 1, p_alloc, p_error_handler) || step.data.cls != &AST_CLS_LITERAL_INT
+			    ||  args.data.d.lgen.get_element(&last, &args, 2, p_alloc, p_error_handler) || last.data.cls != &AST_CLS_LITERAL_INT
 			    ||  step.data.d.i == 0
 			    ||  (step.data.d.i > 0 && (first.data.d.i > last.data.d.i))
 			    ||  (step.data.d.i < 0 && (first.data.d.i < last.data.d.i))
 			    )
-				return -1;
+				return ejson_error(p_error_handler, "triple argument range expects an integer first, step and last values. step must be non-zero and have the correct sign for the range.\n");
+
 			lrange.first     = first.data.d.i;
 			lrange.step_size = step.data.d.i;
 			lrange.numel     = (last.data.d.i - first.data.d.i) / step.data.d.i + 1;
@@ -1763,27 +1732,27 @@ int main(int argc, char *argv[]) {
 		,"float additive expression 1"
 		);
 	run_test
-		("range(5)"
+		("range[5]"
 		,"[0, 1, 2, 3, 4]"
 		,"range generator simple"
 		);
 	run_test
-		("range(6,11)"
+		("range[6,11]"
 		,"[6, 7, 8, 9, 10, 11]"
 		,"range generator from-to"
 		);
 	run_test
-		("range(6,-11)"
+		("range[6,-11]"
 		,"[6,5,4,3,2,1,0,-1,-2,-3,-4,-5,-6,-7,-8,-9,-10,-11]"
 		,"range generator from-to reverse"
 		);
 	run_test
-		("range(6,2,10)"
+		("range[6,2,10]"
 		,"[6,8,10]"
 		,"range generator from-step-to"
 		);
 	run_test
-		("range(6,-3,-9)"
+		("range[6,-3,-9]"
 		,"[6,3,0,-3,-6,-9]"
 		,"range generator from-step-to 2"
 		);
@@ -1837,7 +1806,7 @@ int main(int argc, char *argv[]) {
 		,"extraction of a value from a literal list"
 		);
 	run_test
-		("listval range(10) 4"
+		("listval range[10] 4"
 		,"4"
 		,"extracting an element of a generated list"
 		);
@@ -1854,7 +1823,7 @@ int main(int argc, char *argv[]) {
 		 "calling another function"
 		);
 	run_test
-		("call func(x, y, z) x * y + z range(4, 6)"
+		("call func(x, y, z) x * y + z range[4, 6]"
 		,"26"
 		,"calling a function where the arguments are the list produced by "
 		 "calling range"
@@ -1870,20 +1839,26 @@ int main(int argc, char *argv[]) {
 		,"map operation basics"
 		);
 	run_test
-		("map func(x) listval [\"a\",\"b\",\"c\",\"d\",\"e\"] x%5 range(-2,1,8)"
+		("map func(x) listval [\"a\",\"b\",\"c\",\"d\",\"e\"] x%5 range[-2,1,8]"
 		,"[\"d\",\"e\",\"a\",\"b\",\"c\",\"d\",\"e\",\"a\",\"b\",\"c\",\"d\"]"
 		,"map over a range basics"
 		);
 	run_test
-		("map func(x) range(x) range(0,5)"
+		("map func(x) range[x] range[0,5]"
 		,"[[],[0],[0,1],[0,1,2],[0,1,2,3],[0,1,2,3,4]]"
 		,"use map to generate a list of incrementing ranges over a range"
 		);
+	run_test
+		("range call func() [1,2,9] []"
+		,"[1,3,5,7,9]"
+		,"call range with arguments given by the result of a function call"
+		);
+
 
 	/* FIXME: something is broken i think with the test comparison function. */
 	run_test
 		("define notes=[\"a\",\"b\",\"c\"];"
-		 "map func(x) {\"name\": listval notes x%3, \"id\": x} range(0,5)"
+		 "map func(x) {\"name\": listval notes x % 3, \"id\": x} range[0,5]"
 		,"[{\"id\":0,\"name\":\"a\"}"
 		 ",{\"id\":1,\"name\":\"b\"}"
 		 ",{\"id\":2,\"name\":\"c\"}"
