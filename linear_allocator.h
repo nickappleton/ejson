@@ -5,7 +5,7 @@
 #include <assert.h>
 #include <stdio.h>
 
-#define ALLOC_SZ (63336*16)
+#define ALLOC_SZ (32768)
 
 struct linear_allocator {
     char   buf[ALLOC_SZ];
