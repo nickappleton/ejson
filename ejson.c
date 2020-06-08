@@ -567,15 +567,18 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 	const struct token *p_token;
 
 	if ((p_token = tok_read(p_tokeniser)) == NULL)
-		return ejson_error_null(p_error_handler, "no tokens to parse\n");
+		return ejson_error_null(p_error_handler, "failed to read another token because\n");
 
 	if (p_token->cls == &TOK_LPAREN) {
 		const struct ast_node *p_subexpr;
 
 		if ((p_subexpr = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
-			return NULL;
+			return ejson_error_null(p_error_handler, "failed to read expression after ( because\n");
 
-		if ((p_token = tok_read(p_tokeniser)) == NULL || p_token->cls != &TOK_RPAREN)
+		if ((p_token = tok_read(p_tokeniser)) == NULL)
+			return ejson_error_null(p_error_handler, "failed to read another token because\n");
+
+		if (p_token->cls != &TOK_RPAREN)
 			return ejson_error_null(p_error_handler, "expected close parenthesis\n");
 
 		return p_subexpr;
@@ -586,7 +589,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		const struct ast_node **node;
 
 		if ((k = istrings_add(&(p_workspace->strings), p_token->t.strident.str)) == NULL)
-			return ejson_error_null(p_error_handler, "oom\n");
+			return ejson_error_null(p_error_handler, "out of memory\n");
 
 		if ((node = (const struct ast_node **)pdict_get(&(p_workspace->workspace), (uintptr_t)(k->cstr))) == NULL)
 			return ejson_error_null(p_error_handler, "'%s' was not found in the workspace\n", k->cstr);
@@ -598,26 +601,28 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls        = &AST_CLS_LISTVAL;
 		if ((p_ret->d.listval.p_list = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
-			return NULL;
+			return ejson_error_null(p_error_handler, "could not parse the listval list expression because\n");
 		if ((p_ret->d.listval.p_index = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
-			return NULL;
+			return ejson_error_null(p_error_handler, "could not parse the listval index expression because\n");
 	} else if (p_token->cls == &TOK_MAP) {
 		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls        = &AST_CLS_MAP;
 		if ((p_ret->d.map.p_function = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
-			return NULL;
+			return ejson_error_null(p_error_handler, "could not parse the map function expression because\n");
 		if ((p_ret->d.map.p_input_list = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
-			return NULL;
+			return ejson_error_null(p_error_handler, "could not parse the map data expression because\n");
 	} else if (p_token->cls == &TOK_INT) {
-		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
+		if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
+			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->cls        = &AST_CLS_LITERAL_INT;
 		p_ret->d.i        = p_token->t.tint;
 	} else if (p_token->cls == &TOK_FLOAT) {
-		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
+		if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
+			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->cls        = &AST_CLS_LITERAL_FLOAT;
 		p_ret->d.f        = p_token->t.tflt;
 	} else if (p_token->cls == &TOK_STRING) {
-		size_t sl           = strlen(p_token->t.strident.str);
+		size_t sl = strlen(p_token->t.strident.str);
 		char *p_strbuf;
 		p_ret               = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_strbuf            = linear_allocator_alloc(&(p_workspace->alloc), sl + 1);
@@ -674,15 +679,13 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 	} else if (p_token->cls == &TOK_LSQBR) {
 		uint_fast32_t nb_list = 0;
 		const struct token *p_next;
-		if ((p_next = tok_peek(p_tokeniser)) == NULL) {
-			fprintf(stderr, "expected another token\n");
-			return NULL;
-		}
+		if ((p_next = tok_peek(p_tokeniser)) == NULL)
+			return ejson_error_null(p_error_handler, "a list expression must be terminated\n");
 		if (p_next->cls != &TOK_RSQBR) {
 			do {
 				p_temp_nodes[nb_list] = expect_expression(p_workspace, p_tokeniser, p_error_handler);
 				if (p_temp_nodes[nb_list] == NULL)
-					return NULL;
+					return ejson_error_null(p_error_handler, "failed to evaluate the expression for list element %d because\n", nb_list);
 				nb_list++;
 				if ((p_token = tok_read(p_tokeniser)) == NULL || (p_token->cls != &TOK_RSQBR && p_token->cls != &TOK_COMMA)) {
 					fprintf(stderr, "expected , or ]\n");
@@ -742,22 +745,21 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		struct ast_node args[32];
 		uintptr_t       argnames[32];
 
-		if ((p_token = tok_read(p_tokeniser)) == NULL || p_token->cls != &TOK_LPAREN) {
-			fprintf(stderr, "expected (\n");
-			return NULL;
-		}
-		if ((p_token = tok_read(p_tokeniser)) == NULL) {
-			fprintf(stderr, "expected another token after (\n");
-			return NULL;
-		}
+		if ((p_token = tok_read(p_tokeniser)) == NULL)
+			return ejson_error_null(p_error_handler, "failed to get another token because\n");
+
+		if (p_token->cls != &TOK_LPAREN)
+			return ejson_error_null(p_error_handler, "an open parenthesis was expected\n");
+
+		if ((p_token = tok_read(p_tokeniser)) == NULL)
+			return ejson_error_null(p_error_handler, "failed to get another token after ( because\n");
+
 		if (p_token->cls != &TOK_RPAREN) {
 			do {
 				const struct istring *k;
 				void **node;
-				if (p_token->cls != &TOK_IDENTIFIER) {
-					fprintf(stderr, "function parameter names must be identifiers %s\n", p_token->cls->name);
-					return NULL;
-				}
+				if (p_token->cls != &TOK_IDENTIFIER)
+					return ejson_error_null(p_error_handler, "expected a parameter name literal but got a %s token\n", p_token->cls->name);
 				k = istrings_add(&(p_workspace->strings), p_token->t.strident.str);
 				if (k == NULL) {
 					fprintf(stderr, "oom\n");
@@ -767,11 +769,9 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 					fprintf(stderr, "expected another token\n");
 					return NULL;
 				}
-				if (p_token->cls != &TOK_COMMA && p_token->cls != &TOK_RPAREN) {
-					fprintf(stderr, "expected , or )\n");
-					return NULL;
-				}
-
+				if (p_token->cls != &TOK_COMMA && p_token->cls != &TOK_RPAREN)
+					return ejson_error_null(p_error_handler, "a comma or close parenthesis was expected\n");
+				
 				argnames[nb_args] = (uintptr_t)(k->cstr);
 				node = pdict_get(&(p_workspace->workspace), argnames[nb_args]);
 				if (node != NULL) {
@@ -801,7 +801,9 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		p_ret               = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls          = &AST_CLS_FUNCTION;
 		p_ret->d.fn.nb_args = nb_args;
-		p_ret->d.fn.node    = expect_expression(p_workspace, p_tokeniser, p_error_handler);
+		if ((p_ret->d.fn.node = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
+			return ejson_error_null(p_error_handler, "failed to parse the function expression for func because\n");
+
 		p_workspace->stack_depth -= nb_args;
 
 		for (i = 0; i < nb_args; i++) {
@@ -811,23 +813,15 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 			}
 		}
 
-		if (p_ret->d.fn.node == NULL)
-			return ejson_error_null(p_error_handler, "expected expression for function expression\n");
-
 	} else if (p_token->cls == &TOK_CALL) {
 		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls        = &AST_CLS_CALL;
 		p_ret->d.call.fn  = expect_expression(p_workspace, p_tokeniser, p_error_handler);
-		if (p_ret->d.call.fn == NULL) {
-			fprintf(stderr, "expected function expression\n");
-			return NULL;
-		}
-
+		if (p_ret->d.call.fn == NULL)
+			return ejson_error_null(p_error_handler, "failed to parse function expression for call because\n");
 		p_ret->d.call.p_args  = expect_expression(p_workspace, p_tokeniser, p_error_handler);
-		if (p_ret->d.call.p_args == NULL) {
-			fprintf(stderr, "expected argument expression\n");
-			return NULL;
-		}
+		if (p_ret->d.call.p_args == NULL)
+			return ejson_error_null(p_error_handler, "failed to parse argument expression for call because\n");
 	} else {
 		token_print(p_token);
 		abort();
@@ -853,7 +847,7 @@ const struct ast_node *expect_expression_1(const struct ast_node *p_lhs, struct 
 		assert(p_token != NULL);
 
 		if ((p_rhs = parse_primary(p_workspace, p_tokeniser, p_error_handler)) == NULL)
-			return ejson_error_null(p_error_handler, "could not parse primary\n");
+			return ejson_error_null(p_error_handler, "failed to parse primary because\n");
 	
 		while
 		    (   (p_token = tok_peek(p_tokeniser)) != NULL
@@ -863,7 +857,7 @@ const struct ast_node *expect_expression_1(const struct ast_node *p_lhs, struct 
 		        )
 			) {
 			if ((p_rhs = expect_expression_1(p_rhs, p_workspace, p_tokeniser, p_token->cls->precedence, p_error_handler)) == NULL)
-				return ejson_error_null(p_error_handler, "could not parse RHS\n");
+				return ejson_error_null(p_error_handler, "failed to parse RHS of expression because\n");
 		}
 
 		assert(p_op->bin_op_cls != NULL);
@@ -1101,20 +1095,23 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 
 			const struct ast_node *p_key;
 			
-			if ((p_key = evaluate_ast(p_src->d.ldict.elements[2*i+0], pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL || p_key->cls != &AST_CLS_LITERAL_STRING)
-				return (ejson_error(p_error_handler, "dictionary keys must evaluate to strings\n"), NULL);
+			if ((p_key = evaluate_ast(p_src->d.ldict.elements[2*i+0], pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
+				return (ejson_error(p_error_handler, "failed to evaluate the key expression for the dictionary because\n"), NULL);
+			if (p_key->cls != &AST_CLS_LITERAL_STRING)
+				return (ejson_error(p_error_handler, "a key expression in a dictionary did not evaluate to a string\n"), NULL);
 
 			len  = hashfnv(p_key->d.str.p_data, &hash);
 			ukey = hash;
 			while (p_iter != NULL) {
 				if (p_iter->key == hash && !strcmp((const char *)(p_iter + 1), p_key->d.str.p_data))
-					return NULL;
+					return ejson_error_null(p_error_handler, "attempted to add a key to a dictionary that already existed (%s)\n", p_key->d.str.p_data);
 				pp_ipos = &(p_iter->p_children[ukey & DICTNODE_MASK]);
 				p_iter = *pp_ipos;
 				ukey >>= DICTNODE_BITS;
 			}
 
-			p_iter       = linear_allocator_alloc(p_alloc, sizeof(struct dictnode) + len + 1);
+			if ((p_iter = linear_allocator_alloc(p_alloc, sizeof(struct dictnode) + len + 1)) == NULL)
+				return ejson_error_null(p_error_handler, "out of memory\n");
 			p_iter->data2 = p_src->d.ldict.elements[2*i+1];
 			p_iter->key  = hash;
 			memset(p_iter->p_children, 0, sizeof(p_iter->p_children));
@@ -1137,20 +1134,19 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		const struct ast_node *p_idx;
 		const struct ast_node *p_ret;
 		long long idx;
-		size_t save;
-
-		save = linear_allocator_save(p_alloc);
-		if ((p_idx = evaluate_ast(p_src->d.listval.p_index, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL || p_idx->cls != &AST_CLS_LITERAL_INT)
-			return (ejson_error(p_error_handler, "listval expects an integer index expression\n"), NULL);
+		size_t save = linear_allocator_save(p_alloc);
+		if ((p_idx = evaluate_ast(p_src->d.listval.p_index, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
+			return ejson_error_null(p_error_handler, "failed to evaluate the index expression for listval because\n");
+		if (p_idx->cls != &AST_CLS_LITERAL_INT)
+			return ejson_error_null(p_error_handler, "the index expression for listval did not evaluate to an integer\n");
 		idx = p_idx->d.i;
 		linear_allocator_restore(p_alloc, save);
-
-		if ((p_list = evaluate_ast(p_src->d.listval.p_list, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL || p_list->cls != &AST_CLS_LIST_GENERATOR)
-			return (ejson_error(p_error_handler, "listval expects a list generator source expression\n"), NULL);
-
+		if ((p_list = evaluate_ast(p_src->d.listval.p_list, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
+			return ejson_error_null(p_error_handler, "failed to evaluate the list expression for listval because\n");
+		if (p_list->cls != &AST_CLS_LIST_GENERATOR)
+			return ejson_error_null(p_error_handler, "the list expression for listval did not evaluate to a list\n");
 		if ((p_ret = p_list->d.lgen.get_element(p_list, idx, p_alloc, p_error_handler)) == NULL)
-			return (ejson_error(p_error_handler, "could not get element\n"), NULL);
-
+			return ejson_error_null(p_error_handler, "failed to evaluate list element %d because\n", idx);
 		return p_ret;
 	}
 
@@ -1160,27 +1156,25 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		const struct ast_node *p_args;
 		const struct ast_node **pp_stack2 = pp_stackx;
 
-		if ((p_function = evaluate_ast(p_src->d.call.fn, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL || p_function->cls != &AST_CLS_FUNCTION)
-			return (ejson_error(p_error_handler, "call expects a function\n"), NULL);
-
-		if ((p_args = evaluate_ast(p_src->d.call.p_args, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL || p_args->cls != &AST_CLS_LIST_GENERATOR)
-			return (ejson_error(p_error_handler, "call expects the arguments to evaluate to a list\n"), NULL);
-
+		if ((p_function = evaluate_ast(p_src->d.call.fn, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
+			return ejson_error_null(p_error_handler, "failed to evaluate the function expression for call because\n");
+		if (p_function->cls != &AST_CLS_FUNCTION)
+			return ejson_error_null(p_error_handler, "the function expression for call did not evaluate to a function\n");
+		if ((p_args = evaluate_ast(p_src->d.call.p_args, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
+			return ejson_error_null(p_error_handler, "failed to evaluate the argument expression for call because\n");
+		if (p_args->cls != &AST_CLS_LIST_GENERATOR)
+			return ejson_error_null(p_error_handler, "the argument expression for call did not evaluate to a list\n");
 		if (p_args->d.lgen.nb_elements != p_function->d.fn.nb_args)
-			return (ejson_error(p_error_handler, "function supplied with incorrect number of arguments (call=%u,fn=%u)\n", p_args->d.lgen.nb_elements, p_function->d.fn.nb_args), NULL);
-
+			return ejson_error_null(p_error_handler, "the number of arguments supplied to function was incorrect (expected %u but got %u)\n", p_function->d.fn.nb_args, p_args->d.lgen.nb_elements);
 		if (p_args->d.lgen.nb_elements) {
 			unsigned i;
-
 			if ((pp_stack2 = linear_allocator_alloc(p_alloc, sizeof(struct ast_node *) * (stack_sizex + p_args->d.lgen.nb_elements))) == NULL)
-				return (ejson_error(p_error_handler, "oom\n"), NULL);
-
+				return ejson_error_null(p_error_handler, "out of memory\n");
 			if (stack_sizex)
 				memcpy(pp_stack2, pp_stackx, stack_sizex * sizeof(struct ast_node *));
-
 			for (i = 0; i < p_args->d.lgen.nb_elements; i++) {
 				if ((pp_stack2[stack_sizex + p_args->d.lgen.nb_elements - 1 - i] = p_args->d.lgen.get_element(p_args, i, p_alloc, p_error_handler)) == NULL)
-					return (ejson_error(p_error_handler, "failed to eval argument\n"), NULL);
+					return ejson_error_null(p_error_handler, "failed to evaluate list element %d because\n", i);
 			}
 		}
 
@@ -1194,7 +1188,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		const struct ast_node *p_result;
 
 		if ((p_result = evaluate_ast(p_src->d.binop.p_lhs, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
-			return NULL;
+			return ejson_error_null(p_error_handler, "failed to evaluate the expression for unary negation because\n");
 
 		if (p_result->cls == &AST_CLS_LITERAL_INT) {
 			p_tmp2->cls = &AST_CLS_LITERAL_INT;
@@ -1210,7 +1204,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 			return p_tmp2;
 		}
 
-		return (ejson_error(p_error_handler, "unary negation can only be applied to numeric types\n"), NULL);
+		return ejson_error_null(p_error_handler, "the expression for the unary negation operator did not evaluate to a numeric type\n");
 	}
 
 	/* Convert range into an accessor object */
@@ -1373,7 +1367,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 			return p_ret;
 		}
 
-		ejson_error(p_error_handler, "invalid types given for binary operator %s\n", p_src->cls->p_name);
+		ejson_error(p_error_handler, "the types given for binary operator %s were invalid\n", p_src->cls->p_name);
 		return NULL;
 	}
 
@@ -1519,13 +1513,13 @@ int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace,
 			return ejson_error(p_error_handler, "out of memory\n");
 	}
 	if ((p_obj = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
-		return ejson_error(p_error_handler, "expected main document expression\n");
+		return ejson_error(p_error_handler, "failed to parse root document expression because\n");
 	if ((p_token = tok_read(p_tokeniser)) != NULL)
 		return ejson_error(p_error_handler, "expected no more tokens - got '%s'\n", p_token->cls->name);
 	if ((p_root = evaluate_ast(p_obj, NULL, 0, &(p_workspace->alloc), p_error_handler)) == NULL)
-		return ejson_error(p_error_handler, "unable to evaluate root document node\n");
+		return ejson_error(p_error_handler, "failed to evaluate root document expression because\n");
 	if (to_jnode(p_node, p_root, &(p_workspace->alloc), p_error_handler))
-		return ejson_error(p_error_handler, "could not get the root json node\n");
+		return ejson_error(p_error_handler, "failed to convert the evaluated root document to expression to a json node because\n");
 	return 0;
 }
 
@@ -1887,7 +1881,7 @@ int main(int argc, char *argv[]) {
 		,"the evaluation of the root node cannot be a function"
 		);
 	run_test
-		("call func() x [1, 2]"
+		("call func() 1 [1, 2]"
 		,NULL
 		,"call a function with incorrect number of arguments (0)"
 		);
@@ -1905,6 +1899,46 @@ int main(int argc, char *argv[]) {
 		("9 + 8 * k"
 		,NULL
 		,"failure to parse rhs due to identifier not existing"
+		);
+	run_test
+		("["
+		,NULL
+		,"failure because need more tokens"
+		);
+	run_test
+		("[1,ggg"
+		,NULL
+		,"failure because need more tokens"
+		);
+	run_test
+		("func"
+		,NULL
+		,"failure because need more tokens"
+		);
+	run_test
+		("func sadsa 1"
+		,NULL
+		,"func expects open parenthesis"
+		);
+	run_test
+		("func (sadsa 1"
+		,NULL
+		,"func expects comma or close parenthesis"
+		);
+	run_test
+		("func (sadsa, 1"
+		,NULL
+		,"func arguments must be literals"
+		);
+	run_test
+		("func (sadsa 1)"
+		,NULL
+		,"func expects a function body"
+		);
+	run_test
+		("func (sadsa 1) ("
+		,NULL
+		,"func cannot parse function body"
 		);
 
 
