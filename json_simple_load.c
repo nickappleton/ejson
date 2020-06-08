@@ -1,6 +1,7 @@
 #include "json_simple_load.h"
 #include <string.h>
 #include <math.h>
+#include "parse_helpers.h"
 
 struct jdictnode {
 	uint_fast32_t    key;
@@ -13,58 +14,6 @@ struct jlistelem {
 	struct jlistelem *p_next;
 };
 
-static void eat_whitespace(const char **pp_buf) {
-	const char *p_buf = *pp_buf;
-	while (*p_buf == '\t' || *p_buf == '\r' || *p_buf == '\n' || *p_buf == ' ')
-		p_buf++;
-	*pp_buf = p_buf;
-}
-
-static int expect_char(const char **pp_buf, char c) {
-	const char *p_buf = *pp_buf;
-	if (*p_buf != c)
-		return 1;
-	*pp_buf = p_buf + 1;
-	return 0;
-}
-
-static int expect_digit(const char **pp_buf, unsigned *digit) {
-	const char *p_buf = *pp_buf;
-	if (*p_buf < '0' || *p_buf > '9')
-		return 1;
-	*digit  = (*p_buf) - '0';
-	*pp_buf = p_buf + 1;
-	return 0;
-}
-
-static int expect_num(const char **pp_buf, unsigned long long *p_num) {
-	unsigned long long num;
-	unsigned d;
-	if (expect_digit(pp_buf, &d))
-		return -1;
-	num = d;
-	while (!expect_digit(pp_buf, &d))
-		num = num * 10 + d;
-	*p_num = num;
-	return 0;
-}
-
-static int expect_consecutive(const char **pp_buf, const char *p_expect) {
-	const char *p_buf = *pp_buf;
-	while (*p_expect != '\0' && *p_buf == *p_expect) {
-		p_buf++;
-		p_expect++;
-	}
-	if (*p_expect != '\0')
-		return -1;
-	*pp_buf = p_buf;
-	return 0;
-}
-
-static int is_eof(const char **pp_buf) {
-	const char *p_buf = *pp_buf;
-	return *p_buf == '\0';
-}
 
 static int eat_remaining_string(const char **pp_buf, struct linear_allocator *p_alloc, const char **pp_str) {
 	const char *p_buf = *pp_buf;
@@ -259,12 +208,12 @@ static int expect_object(const char **pp_buf, struct jnode *p_root, struct linea
 		if (!expect_char(pp_buf, '.')) {
 			double frac = 0.1;
 			double fp = 0.0;
-			if (expect_digit(pp_buf, &d))
+			if (expect_decimal_digit(pp_buf, &d))
 				return -1;
 			do {
 				fp   += frac * (int)d;
 				frac *= 0.1;
-			} while (!expect_digit(pp_buf, &d));
+			} while (!expect_decimal_digit(pp_buf, &d));
 			p_root->cls = JNODE_CLS_REAL;
 			p_root->d.real = fp + ipart;
 		}

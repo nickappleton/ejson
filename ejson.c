@@ -9,6 +9,7 @@
 #include "linear_allocator.h"
 #include "../istrings.h"
 #include "../pdict.h"
+#include "parse_helpers.h"
 
 #define MAX_TOK_STRING (4096)
 
@@ -306,7 +307,7 @@ TOK_DECL(TOK_EOF,        -1, 0, NULL); /* EOF */
 
 struct tokeniser {
 	unsigned      lp; /* line position, character position */
-	char         *buf;
+	const char   *buf;
 
 	struct token  cur;
 };
@@ -354,12 +355,11 @@ int tokeniser_next(struct tokeniser *p_tokeniser) {
 		return 0;
 	}
 
-	if (c == '#') abort();
 	assert(c != '#');
 
 	/* quoted string */
 	if (c == '\"') {
-		p_tokeniser->cur.cls           = &TOK_STRING;
+		p_tokeniser->cur.cls            = &TOK_STRING;
 		p_tokeniser->cur.t.strident.len = 0;
 		while ((c = *(p_tokeniser->buf++)) != '\"') {
 			if (c == '\0')
@@ -374,7 +374,29 @@ int tokeniser_next(struct tokeniser *p_tokeniser) {
 					c = '\\';
 				else if (c == '\"')
 					c = '\"';
-				else
+				else if (c == '/')
+					c = '/';
+				else if (c == 'b')
+					c = '\b';
+				else if (c == 'f')
+					c = '\f';
+				else if (c == 'n')
+					c = '\n';
+				else if (c == 'r')
+					c = '\r';
+				else if (c == 't')
+					c = '\t';
+				else if (c == 'u') {
+					unsigned h;
+					if  (   expect_hex_digit(&(p_tokeniser->buf), &h)
+					    ||  expect_hex_digit_accumulate(&(p_tokeniser->buf), &h)
+					    ||  expect_hex_digit_accumulate(&(p_tokeniser->buf), &h)
+					    ||  expect_hex_digit_accumulate(&(p_tokeniser->buf), &h)
+					    )
+						return -1;
+					/* Convert to UTF-8 now. */
+					abort();
+				} else
 					return -1; /* invalid escape */
 			}
 
