@@ -20,7 +20,7 @@
 #endif
 
 #ifndef ejson_error
-static int ejson_error_fn(struct ejson_error_handler *p_handler, const char *p_format, ...) {
+static int ejson_error_fn(const struct ejson_error_handler *p_handler, const char *p_format, ...) {
 	if (p_handler != NULL) {
 		va_list args;
 		va_start(args, p_format);
@@ -100,7 +100,7 @@ struct ast_node {
 			const struct ast_node **pp_stack;
 			unsigned                stack_size;
 
-			const struct ast_node *(*get_element)(const struct ast_node *p_list, unsigned element, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler);
+			const struct ast_node *(*get_element)(const struct ast_node *p_list, unsigned element, struct linear_allocator *p_alloc, const struct ejson_error_handler *p_error_handler);
 			union {
 				struct {
 					long long first;
@@ -539,9 +539,9 @@ void evaluation_context_free(struct evaluation_context *p_ctx) {
 	istrings_free(&(p_ctx->strings));
 }
 
-const struct ast_node *expect_expression(struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser);
+const struct ast_node *expect_expression(struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser, const struct ejson_error_handler *p_error_handler);
 
-const struct ast_node *parse_primary(struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser) {
+const struct ast_node *parse_primary(struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser, const struct ejson_error_handler *p_error_handler) {
 	const struct ast_node *p_temp_nodes[8192];
 	struct ast_node *p_ret = NULL;
 
@@ -551,7 +551,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 			fprintf(stderr, "expected another token\n");
 			return NULL;
 		}
-		if ((p_subexpr = expect_expression(p_workspace, p_tokeniser)) == NULL)
+		if ((p_subexpr = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
 		if (p_tokeniser->cur.cls != &TOK_RPAREN) {
 			fprintf(stderr, "expected close parenthesis\n");
@@ -587,18 +587,18 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 			return NULL;
 		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls        = &AST_CLS_LISTVAL;
-		if ((p_ret->d.listval.p_list = expect_expression(p_workspace, p_tokeniser)) == NULL)
+		if ((p_ret->d.listval.p_list = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
-		if ((p_ret->d.listval.p_index = expect_expression(p_workspace, p_tokeniser)) == NULL)
+		if ((p_ret->d.listval.p_index = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
 	} else if (p_tokeniser->cur.cls == &TOK_MAP) {
 		if (tokeniser_next(p_tokeniser))
 			return NULL;
 		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls        = &AST_CLS_MAP;
-		if ((p_ret->d.map.p_function = expect_expression(p_workspace, p_tokeniser)) == NULL)
+		if ((p_ret->d.map.p_function = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
-		if ((p_ret->d.map.p_input_list = expect_expression(p_workspace, p_tokeniser)) == NULL)
+		if ((p_ret->d.map.p_input_list = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
 	} else if (p_tokeniser->cur.cls == &TOK_INT) {
 		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
@@ -632,7 +632,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		}
 		if (p_tokeniser->cur.cls != &TOK_RBRACE) {
 			do {
-				p_temp_nodes[2*nb_kvs+0] = expect_expression(p_workspace, p_tokeniser);
+				p_temp_nodes[2*nb_kvs+0] = expect_expression(p_workspace, p_tokeniser, p_error_handler);
 				if (p_temp_nodes[2*nb_kvs+0] == NULL) {
 					fprintf(stderr, "expected expression\n");
 					return NULL;
@@ -645,7 +645,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 					fprintf(stderr, "expected another token\n");
 					return NULL;
 				}
-				p_temp_nodes[2*nb_kvs+1] = expect_expression(p_workspace, p_tokeniser);
+				p_temp_nodes[2*nb_kvs+1] = expect_expression(p_workspace, p_tokeniser, p_error_handler);
 				if (p_temp_nodes[2*nb_kvs+1] == NULL) {
 					fprintf(stderr, "expected expression\n");
 					return NULL;
@@ -682,7 +682,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		}
 		if (p_tokeniser->cur.cls != &TOK_RSQBR) {
 			do {
-				p_temp_nodes[nb_list] = expect_expression(p_workspace, p_tokeniser);
+				p_temp_nodes[nb_list] = expect_expression(p_workspace, p_tokeniser, p_error_handler);
 				if (p_temp_nodes[nb_list] == NULL)
 					return NULL;
 				nb_list++;
@@ -716,7 +716,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 			return NULL;
 		}
 		/* TODO: This sucks we can have unary unary unary unary unary.... don't want. */
-		p_next = expect_expression(p_workspace, p_tokeniser);
+		p_next = expect_expression(p_workspace, p_tokeniser, p_error_handler);
 		if (p_next == NULL)
 			return NULL;
 		p_ret                = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
@@ -745,14 +745,14 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		p_ret->cls   = &AST_CLS_RANGE;
 		if (tokeniser_next(p_tokeniser))
 			return NULL;
-		if ((p_ret->d.builtin.p_args = expect_expression(p_workspace, p_tokeniser)) == NULL)
+		if ((p_ret->d.builtin.p_args = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
 	} else if (p_tokeniser->cur.cls == &TOK_FORMAT) {
 		p_ret        = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls   = &AST_CLS_FORMAT;
 		if (tokeniser_next(p_tokeniser))
 			return NULL;
-		if ((p_ret->d.builtin.p_args = expect_expression(p_workspace, p_tokeniser)) == NULL)
+		if ((p_ret->d.builtin.p_args = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
 	} else if (p_tokeniser->cur.cls == &TOK_FUNC) {
 		unsigned        nb_args = 0;
@@ -827,7 +827,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		p_ret               = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls          = &AST_CLS_FUNCTION;
 		p_ret->d.fn.nb_args = nb_args;
-		p_ret->d.fn.node    = expect_expression(p_workspace, p_tokeniser);
+		p_ret->d.fn.node    = expect_expression(p_workspace, p_tokeniser, p_error_handler);
 		p_workspace->stack_depth -= nb_args;
 
 		for (i = 0; i < nb_args; i++) {
@@ -850,13 +850,13 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		}
 		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls        = &AST_CLS_CALL;
-		p_ret->d.call.fn  = expect_expression(p_workspace, p_tokeniser);
+		p_ret->d.call.fn  = expect_expression(p_workspace, p_tokeniser, p_error_handler);
 		if (p_ret->d.call.fn == NULL) {
 			fprintf(stderr, "expected function expression\n");
 			return NULL;
 		}
 
-		p_ret->d.call.p_args  = expect_expression(p_workspace, p_tokeniser);
+		p_ret->d.call.p_args  = expect_expression(p_workspace, p_tokeniser, p_error_handler);
 		if (p_ret->d.call.p_args == NULL) {
 			fprintf(stderr, "expected argument expression\n");
 			return NULL;
@@ -870,7 +870,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 	return p_ret;
 }
 
-const struct ast_node *expect_expression_1(const struct ast_node *p_lhs, struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser, int min_precedence) {
+const struct ast_node *expect_expression_1(const struct ast_node *p_lhs, struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser, int min_precedence, const struct ejson_error_handler *p_error_handler) {
 	while
 	    (   p_tokeniser->cur.cls->precedence > 0 /* lookahead is a binary operator */
 		&&  p_tokeniser->cur.cls->precedence >= min_precedence /* whose precedence is >= min_precedence */
@@ -882,7 +882,7 @@ const struct ast_node *expect_expression_1(const struct ast_node *p_lhs, struct 
 		if (tokeniser_next(p_tokeniser))
 			return NULL;
 
-		if ((p_rhs = parse_primary(p_workspace, p_tokeniser)) == NULL)
+		if ((p_rhs = parse_primary(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
 	
 		while
@@ -891,7 +891,7 @@ const struct ast_node *expect_expression_1(const struct ast_node *p_lhs, struct 
 		        ||  (p_tokeniser->cur.cls->right_associative && p_tokeniser->cur.cls->precedence == p_op->precedence) /* or a right-associative operator whose precedence is equal to op's */
 		        )
 			) {
-			if ((p_rhs = expect_expression_1(p_rhs, p_workspace, p_tokeniser, p_tokeniser->cur.cls->precedence)) == NULL)
+			if ((p_rhs = expect_expression_1(p_rhs, p_workspace, p_tokeniser, p_tokeniser->cur.cls->precedence, p_error_handler)) == NULL)
 				return NULL;
 		}
 
@@ -909,11 +909,11 @@ const struct ast_node *expect_expression_1(const struct ast_node *p_lhs, struct 
 	return p_lhs;
 }
 
-const struct ast_node *expect_expression(struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser) {
-	const struct ast_node *p_lhs = parse_primary(p_workspace, p_tokeniser);
+const struct ast_node *expect_expression(struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser, const struct ejson_error_handler *p_error_handler) {
+	const struct ast_node *p_lhs = parse_primary(p_workspace, p_tokeniser, p_error_handler);
 	if (p_lhs == NULL)
 		return NULL;
-	return expect_expression_1(p_lhs, p_workspace, p_tokeniser, 0);
+	return expect_expression_1(p_lhs, p_workspace, p_tokeniser, 0, p_error_handler);
 }
 
 struct jnode_data {
@@ -924,7 +924,7 @@ struct jnode_data {
 
 };
 
-static int to_jnode(struct jnode *p_node, const struct ast_node *p_src, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler);
+static int to_jnode(struct jnode *p_node, const struct ast_node *p_src, struct linear_allocator *p_alloc, const struct ejson_error_handler *p_error_handler);
 
 struct list_element_fn_data {
 	struct p_error_handler  *p_error_handler;
@@ -935,12 +935,12 @@ struct list_element_fn_data {
 };
 
 struct execution_context {
-	const struct ast_node   *p_object;
-	struct ejson_error_handler *p_error_handler;
+	const struct ast_node            *p_object;
+	const struct ejson_error_handler *p_error_handler;
 
 };
 
-const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct ast_node **pp_stackx, unsigned stack_sizex, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler);
+const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct ast_node **pp_stackx, unsigned stack_sizex, struct linear_allocator *p_alloc, const struct ejson_error_handler *p_error_handler);
 
 struct lrange {
 	long long first;
@@ -948,7 +948,7 @@ struct lrange {
 	long long numel;
 };
 
-const struct ast_node *ast_list_generator_get_element(const struct ast_node *p_list, unsigned element, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler) {
+const struct ast_node *ast_list_generator_get_element(const struct ast_node *p_list, unsigned element, struct linear_allocator *p_alloc, const struct ejson_error_handler *p_error_handler) {
 	struct ast_node *p_dest;
 	assert(p_list->cls == &AST_CLS_LIST_GENERATOR);
 	if (element >= p_list->d.lgen.nb_elements)
@@ -960,7 +960,7 @@ const struct ast_node *ast_list_generator_get_element(const struct ast_node *p_l
 	return p_dest;
 }
 
-const struct ast_node *get_literal_element_fn(const struct ast_node *p_src, unsigned element, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler) {
+const struct ast_node *get_literal_element_fn(const struct ast_node *p_src, unsigned element, struct linear_allocator *p_alloc, const struct ejson_error_handler *p_error_handler) {
 	assert(p_src->cls == &AST_CLS_LIST_GENERATOR);
 	if (element >= p_src->d.lgen.nb_elements)
 		return (ejson_error(p_error_handler, "list index out of bounds\n"), NULL);
@@ -969,7 +969,7 @@ const struct ast_node *get_literal_element_fn(const struct ast_node *p_src, unsi
 	return p_src;
 }
 
-const struct ast_node *ast_list_generator_map(const struct ast_node *p_src, unsigned element, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler) {
+const struct ast_node *ast_list_generator_map(const struct ast_node *p_src, unsigned element, struct linear_allocator *p_alloc, const struct ejson_error_handler *p_error_handler) {
 	const struct ast_node *p_argument;
 	const struct ast_node **pp_tmp;
 	const struct ast_node *p_function;
@@ -996,7 +996,7 @@ const struct ast_node *ast_list_generator_map(const struct ast_node *p_src, unsi
 	return evaluate_ast(p_function->d.fn.node, pp_tmp, p_src->d.lgen.stack_size + 1, p_alloc, p_error_handler);
 }
 
-const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct ast_node **pp_stackx, unsigned stack_sizex, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler) {
+const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct ast_node **pp_stackx, unsigned stack_sizex, struct linear_allocator *p_alloc, const struct ejson_error_handler *p_error_handler) {
 	/* Move through stack references. */
 	while (p_src->cls == &AST_CLS_STACKREF) {
 		assert(pp_stackx != NULL);
@@ -1427,13 +1427,13 @@ static int jnode_list_get_element(struct jnode *p_dest, void *ctx, struct linear
 static
 int
 enumerate_dict_keys2
-	(jdict_enumerate_fn         *p_fn
-	,struct ejson_error_handler *p_error_handler
-	,const struct dictnode      *p_node
-	,const struct ast_node     **pp_stack
-	,unsigned                    stack_size
-	,struct linear_allocator    *p_alloc
-	,void                       *p_userctx
+	(jdict_enumerate_fn               *p_fn
+	,const struct ejson_error_handler *p_error_handler
+	,const struct dictnode            *p_node
+	,const struct ast_node           **pp_stack
+	,unsigned                          stack_size
+	,struct linear_allocator          *p_alloc
+	,void                             *p_userctx
 	) {
 	unsigned i;
 	struct jnode tmp;
@@ -1463,7 +1463,7 @@ static int enumerate_dict_keys(jdict_enumerate_fn *p_fn, void *p_ctx, struct lin
 	return 0;
 }
 
-static int to_jnode(struct jnode *p_node, const struct ast_node *p_ast, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler) {
+static int to_jnode(struct jnode *p_node, const struct ast_node *p_ast, struct linear_allocator *p_alloc, const struct ejson_error_handler *p_error_handler) {
 	if (p_ast->cls == &AST_CLS_LITERAL_INT) {
 		p_node->cls        = JNODE_CLS_INTEGER;
 		p_node->d.int_bool = p_ast->d.i;
@@ -1534,14 +1534,14 @@ int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace,
 			return ejson_error(p_error_handler, "cannot redefine variable '%s'\n", p_tokeniser->cur.t.strident.str);
 		if (tokeniser_next(p_tokeniser) || p_tokeniser->cur.cls != &TOK_EQ)
 			return ejson_error(p_error_handler, "expected '='\n");
-		if (tokeniser_next(p_tokeniser) || (p_obj = expect_expression(p_workspace, p_tokeniser)) == NULL)
+		if (tokeniser_next(p_tokeniser) || (p_obj = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return ejson_error(p_error_handler, "expected an expression\n");
 		if (p_tokeniser->cur.cls != &TOK_SEMI || tokeniser_next(p_tokeniser))
 			return ejson_error(p_error_handler, "expected ';'\n");
 		if (pdict_set(&(p_workspace->workspace), (uintptr_t)(p_key->cstr), (void *)p_obj))
 			return ejson_error(p_error_handler, "out of memory\n");
 	}
-	if ((p_obj = expect_expression(p_workspace, p_tokeniser)) == NULL)
+	if ((p_obj = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 		return ejson_error(p_error_handler, "expected main document expression\n");
 	if ((p_root = evaluate_ast(p_obj, NULL, 0, &(p_workspace->alloc), p_error_handler)) == NULL)
 		return ejson_error(p_error_handler, "unable to evaluate root document node\n");
