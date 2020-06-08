@@ -1401,7 +1401,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 			return p_ret;
 		}
 
-		abort();
+		ejson_error(p_error_handler, "invalid types given for binary operator %s\n", p_src->cls->p_name);
 		return NULL;
 	}
 
@@ -1517,12 +1517,7 @@ static int to_jnode(struct jnode *p_node, const struct ast_node *p_ast, struct l
 		return 0;
 	}
 
-	fprintf(stderr, "cannot convert the following type to json ---\n");
-	p_ast->cls->debug_print(p_ast, stderr, 10);
-	fprintf(stderr, "---\n");
-	abort();
-
-	return -1;
+	return ejson_error(p_error_handler, "the given root node class (%s) cannot be represented using JSON\n", p_ast->cls->p_name);
 }
 
 int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser, struct ejson_error_handler *p_error_handler) {
@@ -1551,7 +1546,7 @@ int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace,
 	if ((p_root = evaluate_ast(p_obj, NULL, 0, &(p_workspace->alloc), p_error_handler)) == NULL)
 		return ejson_error(p_error_handler, "unable to evaluate root document node\n");
 	if (to_jnode(p_node, p_root, &(p_workspace->alloc), p_error_handler))
-		return ejson_error(p_error_handler, "could not convert root document node to json node\n");
+		return ejson_error(p_error_handler, "could not get the root json node\n");
 	return 0;
 }
 
@@ -1578,10 +1573,6 @@ static void on_parser_error(void *p_context, const char *p_format, va_list args)
 }
 
 int run_test(const char *p_ejson, const char *p_ref, const char *p_name) {
-	struct linear_allocator a1;
-	struct linear_allocator a2;
-	struct linear_allocator a3;
-	struct jnode ref;
 	struct jnode dut;
 	struct tokeniser t;
 	struct evaluation_context ws;
@@ -1590,13 +1581,6 @@ int run_test(const char *p_ejson, const char *p_ref, const char *p_name) {
 	
 	err.p_context = NULL;
 	err.on_parser_error = on_parser_error;
-
-	a1.pos = 0;
-	a2.pos = 0;
-	a3.pos = 0;
-
-	if (parse_json(&ref, &a1, &a2, p_ref))
-		return unexpected_fail("could not parse reference JSON:\n  %s\n", p_ref);
 
 	tokeniser_start(&t, (char *)p_ejson);
 
@@ -1607,24 +1591,45 @@ int run_test(const char *p_ejson, const char *p_ref, const char *p_name) {
 		return unexpected_fail("could not init workspace\n");
 
 	if (parse_document(&dut, &ws, &t, &err)) {
-		fprintf(stderr, "test '%s' failed due to above messages.\n", p_name);
-		return (fprintf(stderr, "could not parse dut:\n  %s\n", p_ejson), -1);
+		if (p_ref != NULL) {
+			fprintf(stderr, "test '%s' failed due to above messages.\n", p_name);
+			return (fprintf(stderr, "could not parse dut:\n  %s\n", p_ejson), -1);
+		} else {
+			printf("xtest '%s' passed.\n", p_name);
+		}
+	} else if (p_ref == NULL) {
+		printf("xtest '%s' failed because it generated a node.\n", p_name);
 	}
 
-	if ((d = are_different(&dut, &ref, &a3)) < 0) {
-		return unexpected_fail("are_different failed to execute\n");
-	}
-	
-	if (d) {
-		fprintf(stderr, "test '%s' failed:\n", p_name);
-		fprintf(stderr, "  Reference:\n    ");
-		jnode_print(&ref, &a2, 4);
-		fprintf(stderr, "  DUT:\n    ");
-		jnode_print(&dut, &a2, 4);
-		return -1;
+	if (p_ref != NULL) {
+		struct jnode ref;
+		struct linear_allocator a1;
+		struct linear_allocator a2;
+		struct linear_allocator a3;
+
+		a1.pos = 0;
+		a2.pos = 0;
+		a3.pos = 0;
+
+		if (parse_json(&ref, &a1, &a2, p_ref))
+			return unexpected_fail("could not parse reference JSON:\n  %s\n", p_ref);
+
+		if ((d = are_different(&dut, &ref, &a3)) < 0) {
+			return unexpected_fail("are_different failed to execute\n");
+		}
+		
+		if (d) {
+			fprintf(stderr, "test '%s' failed:\n", p_name);
+			fprintf(stderr, "  Reference:\n    ");
+			jnode_print(&ref, &a2, 4);
+			fprintf(stderr, "  DUT:\n    ");
+			jnode_print(&dut, &a2, 4);
+			return -1;
+		}
+
+		printf("test '%s' passed.\n", p_name);
 	}
 
-	printf("test '%s' passed.\n", p_name);
 	return 0;
 }
 
@@ -1881,6 +1886,39 @@ int main(int argc, char *argv[]) {
 		,"12"
 		,"test calling a function that is in a list of cuntions"
 		);
+
+	/* Expected fail tests */
+	run_test
+		("1+\"a\""
+		,NULL
+		,"arguments to operators must be integers of floats"
+		);
+	run_test
+		("-\"a\""
+		,NULL
+		,"arguments to unary negate must be an integer or a float"
+		);
+	run_test
+		("{1: null}"
+		,NULL
+		,"dictionary keys must evaluate to strings"
+		);
+	run_test
+		("func(x) x"
+		,NULL
+		,"the evaluation of the root node cannot be a function"
+		);
+	run_test
+		("call func() x [1, 2]"
+		,NULL
+		,"call a function with incorrect number of arguments (0)"
+		);
+	run_test
+		("call func(x) x [1, 2]"
+		,NULL
+		,"call a function with incorrect number of arguments (1)"
+		);
+
 
 	/* FIXME: something is broken i think with the test comparison function. */
 	run_test
