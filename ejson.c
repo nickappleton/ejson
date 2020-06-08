@@ -32,6 +32,10 @@ static int ejson_error_fn(const struct ejson_error_handler *p_handler, const cha
 #define ejson_error ejson_error_fn
 #endif
 
+#ifndef ejson_error_null
+#define ejson_error_null(...) (ejson_error(__VA_ARGS__), NULL)
+#endif
+
 struct ast_node;
 
 struct ast_cls {
@@ -302,17 +306,19 @@ TOK_DECL(TOK_RSQBR,      -1, 0, NULL); /* ] */
 TOK_DECL(TOK_EQ,         -1, 0, NULL); /* = */
 TOK_DECL(TOK_COLON,      -1, 0, NULL); /* : */
 TOK_DECL(TOK_SEMI,       -1, 0, NULL); /* ; */
-TOK_DECL(TOK_EOF,        -1, 0, NULL); /* EOF */
-
 
 struct tokeniser {
 	unsigned      lp; /* line position, character position */
 	const char   *buf;
 
-	struct token  cur;
+	struct token  *p_current;
+	struct token  *p_next;
+
+	struct token  curx;
+	struct token  nextx;
 };
 
-static void token_print(struct token *p_token) {
+static void token_print(const struct token *p_token) {
 	if (p_token->cls == &TOK_IDENTIFIER || p_token->cls == &TOK_STRING) {
 		printf("%s:'%s'\n", p_token->cls->name, p_token->t.strident.str);
 	} else if (p_token->cls == &TOK_FLOAT) {
@@ -324,13 +330,18 @@ static void token_print(struct token *p_token) {
 	}
 }
 
-int tokeniser_next(struct tokeniser *p_tokeniser) {
+/* init: load something into next */
+/* peek: return p_next */
+/* next: load next thing into p_current, swap p_current and p_next, return p_current */
+
+const struct token *tok_peek(struct tokeniser *p_tokeniser) {
+	return p_tokeniser->p_next;
+}
+
+const struct token *tok_read(struct tokeniser *p_tokeniser) {
+	struct token *p_temp;
 	char c;
 	int in_comment;
-
-	if (p_tokeniser->cur.cls == &TOK_EOF) {
-		return -1;
-	}
 
 	/* eat whitespace and comments */
 	c          = *(p_tokeniser->buf++);
@@ -351,22 +362,25 @@ int tokeniser_next(struct tokeniser *p_tokeniser) {
 
 	/* nothing left */
 	if (c == '\0') {
-		p_tokeniser->cur.cls = &TOK_EOF;
-		return 0;
+		p_temp = p_tokeniser->p_next;
+		p_tokeniser->p_next = NULL;
+		return p_temp;
 	}
 
 	assert(c != '#');
 
+	p_temp = p_tokeniser->p_current;
+
 	/* quoted string */
 	if (c == '\"') {
-		p_tokeniser->cur.cls            = &TOK_STRING;
-		p_tokeniser->cur.t.strident.len = 0;
+		p_temp->cls            = &TOK_STRING;
+		p_temp->t.strident.len = 0;
 		while ((c = *(p_tokeniser->buf++)) != '\"') {
 			if (c == '\0')
-				return -1; /* EOF */
+				return NULL; /* EOF */
 
 			if (c == '\n' || c == '\r')
-				return -1; /* EOL */
+				return NULL; /* EOL */
 
 			if (c == '\\') {
 				c = *(p_tokeniser->buf++);
@@ -393,22 +407,22 @@ int tokeniser_next(struct tokeniser *p_tokeniser) {
 					    ||  expect_hex_digit_accumulate(&(p_tokeniser->buf), &h)
 					    ||  expect_hex_digit_accumulate(&(p_tokeniser->buf), &h)
 					    )
-						return -1;
+						return NULL;
 					/* Convert to UTF-8 now. */
 					abort();
 				} else
-					return -1; /* invalid escape */
+					return NULL; /* invalid escape */
 			}
 
-			p_tokeniser->cur.t.strident.str[p_tokeniser->cur.t.strident.len++] = c;
+			p_temp->t.strident.str[p_temp->t.strident.len++] = c;
 		}
-		p_tokeniser->cur.t.strident.str[p_tokeniser->cur.t.strident.len] = '\0';
+		p_temp->t.strident.str[p_temp->t.strident.len] = '\0';
 	} else if
 	    (   (c == '.' && p_tokeniser->buf[0] >= '0' && p_tokeniser->buf[0] <= '9')
 	    ||  (c >= '0' && c <= '9')
 	    ) {
 		unsigned long long ull = 0;
-		p_tokeniser->cur.cls = &TOK_INT;
+		p_temp->cls = &TOK_INT;
 		while (c >= '0' && c <= '9') {
 			ull *= 10;
 			ull += c - '0';
@@ -416,13 +430,13 @@ int tokeniser_next(struct tokeniser *p_tokeniser) {
 		}
 		if (c == '.') {
 			double frac = 0.1;
-			p_tokeniser->cur.cls    = &TOK_FLOAT;
-			p_tokeniser->cur.t.tflt = ull;
+			p_temp->cls    = &TOK_FLOAT;
+			p_temp->t.tflt = ull;
 			c = *(p_tokeniser->buf++);
 			if (c < '0' || c > '9')
-				return -1; /* 13413. is not a valid literal */
+				return NULL; /* 13413. is not a valid literal */
 			while (c >= '0' && c <= '9') {
-				p_tokeniser->cur.t.tflt += (c - '0') * frac;
+				p_temp->t.tflt += (c - '0') * frac;
 				frac *= 0.1;
 				c = *(p_tokeniser->buf++);
 			}
@@ -438,7 +452,7 @@ int tokeniser_next(struct tokeniser *p_tokeniser) {
 				c = *(p_tokeniser->buf++);
 			}
 			if (c < '0' || c > '9')
-				return -1;
+				return NULL;
 			eval = c - '0';
 			c = *(p_tokeniser->buf++);
 			while (c >= '0' && c <= '9') {
@@ -446,15 +460,15 @@ int tokeniser_next(struct tokeniser *p_tokeniser) {
 				c = *(p_tokeniser->buf++);
 			}
 			eval = (eneg) ? -eval : eval;
-			if (p_tokeniser->cur.cls == &TOK_FLOAT) {
-				p_tokeniser->cur.t.tflt *= pow(10.0, eval);
+			if (p_temp->cls == &TOK_FLOAT) {
+				p_temp->t.tflt *= pow(10.0, eval);
 			} else {
-				p_tokeniser->cur.cls = &TOK_FLOAT;
-				p_tokeniser->cur.t.tflt = ull * pow(10.0, eval);
+				p_temp->cls = &TOK_FLOAT;
+				p_temp->t.tflt = ull * pow(10.0, eval);
 			}
 		}
-		if (p_tokeniser->cur.cls == &TOK_INT) {
-			p_tokeniser->cur.t.tint = ull;
+		if (p_temp->cls == &TOK_INT) {
+			p_temp->t.tint = ull;
 		}
 		p_tokeniser->buf--;
 	} else if
@@ -462,59 +476,65 @@ int tokeniser_next(struct tokeniser *p_tokeniser) {
 	    ||  (c >= 'A' && c <= 'Z')
 	    ) {
 		char nc = *(p_tokeniser->buf);
-		p_tokeniser->cur.t.strident.str[0] = c;
-		p_tokeniser->cur.t.strident.len = 1;
+		p_temp->t.strident.str[0] = c;
+		p_temp->t.strident.len = 1;
 		while
 		    (   (nc >= 'a' && nc <= 'z')
 		    ||  (nc >= 'A' && nc <= 'Z')
 		    ||  (nc >= '0' && nc <= '9')
 		    ||  (nc == '_')
 		    ) {
-			p_tokeniser->cur.t.strident.str[p_tokeniser->cur.t.strident.len++] = nc;
+			p_temp->t.strident.str[p_temp->t.strident.len++] = nc;
 			nc = *(++p_tokeniser->buf);
 		}
-		p_tokeniser->cur.t.strident.str[p_tokeniser->cur.t.strident.len] = '\0';
+		p_temp->t.strident.str[p_temp->t.strident.len] = '\0';
 
-		if (!strcmp(p_tokeniser->cur.t.strident.str, "true")) { p_tokeniser->cur.cls = &TOK_TRUE;
-		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "false")) { p_tokeniser->cur.cls = &TOK_FALSE;
-		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "null")) { p_tokeniser->cur.cls = &TOK_NULL;
-		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "range")) { p_tokeniser->cur.cls = &TOK_RANGE;
-		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "call")) { p_tokeniser->cur.cls = &TOK_CALL;
-		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "func")) { p_tokeniser->cur.cls = &TOK_FUNC;
-		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "define")) { p_tokeniser->cur.cls = &TOK_DEFINE;
-		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "listval")) { p_tokeniser->cur.cls = &TOK_LISTVAL;
-		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "map")) { p_tokeniser->cur.cls = &TOK_MAP;
-		} else if (!strcmp(p_tokeniser->cur.t.strident.str, "format")) { p_tokeniser->cur.cls = &TOK_FORMAT;
-		} else { p_tokeniser->cur.cls = &TOK_IDENTIFIER; }
+		if (!strcmp(p_temp->t.strident.str, "true")) { p_temp->cls = &TOK_TRUE;
+		} else if (!strcmp(p_temp->t.strident.str, "false")) { p_temp->cls = &TOK_FALSE;
+		} else if (!strcmp(p_temp->t.strident.str, "null")) { p_temp->cls = &TOK_NULL;
+		} else if (!strcmp(p_temp->t.strident.str, "range")) { p_temp->cls = &TOK_RANGE;
+		} else if (!strcmp(p_temp->t.strident.str, "call")) { p_temp->cls = &TOK_CALL;
+		} else if (!strcmp(p_temp->t.strident.str, "func")) { p_temp->cls = &TOK_FUNC;
+		} else if (!strcmp(p_temp->t.strident.str, "define")) { p_temp->cls = &TOK_DEFINE;
+		} else if (!strcmp(p_temp->t.strident.str, "listval")) { p_temp->cls = &TOK_LISTVAL;
+		} else if (!strcmp(p_temp->t.strident.str, "map")) { p_temp->cls = &TOK_MAP;
+		} else if (!strcmp(p_temp->t.strident.str, "format")) { p_temp->cls = &TOK_FORMAT;
+		} else { p_temp->cls = &TOK_IDENTIFIER; }
 
-	} else if (c == '=') { p_tokeniser->cur.cls = &TOK_EQ;
-	} else if (c == '[') { p_tokeniser->cur.cls = &TOK_LSQBR;
-	} else if (c == ']') { p_tokeniser->cur.cls = &TOK_RSQBR;
-	} else if (c == '{') { p_tokeniser->cur.cls = &TOK_LBRACE;
-	} else if (c == '}') { p_tokeniser->cur.cls = &TOK_RBRACE;
-	} else if (c == '(') { p_tokeniser->cur.cls = &TOK_LPAREN;
-	} else if (c == ')') { p_tokeniser->cur.cls = &TOK_RPAREN;
-	} else if (c == ',') { p_tokeniser->cur.cls = &TOK_COMMA;
-	} else if (c == ':') { p_tokeniser->cur.cls = &TOK_COLON;
-	} else if (c == ';') { p_tokeniser->cur.cls = &TOK_SEMI;
-	} else if (c == '%') { p_tokeniser->cur.cls = &TOK_MOD;
-	} else if (c == '/') { p_tokeniser->cur.cls = &TOK_DIV;
-	} else if (c == '*') { p_tokeniser->cur.cls = &TOK_MUL;
-	} else if (c == '^') { p_tokeniser->cur.cls = &TOK_EXP;
-	} else if (c == '-') { p_tokeniser->cur.cls = &TOK_SUB;
-	} else if (c == '+') { p_tokeniser->cur.cls = &TOK_ADD;
+	} else if (c == '=') { p_temp->cls = &TOK_EQ;
+	} else if (c == '[') { p_temp->cls = &TOK_LSQBR;
+	} else if (c == ']') { p_temp->cls = &TOK_RSQBR;
+	} else if (c == '{') { p_temp->cls = &TOK_LBRACE;
+	} else if (c == '}') { p_temp->cls = &TOK_RBRACE;
+	} else if (c == '(') { p_temp->cls = &TOK_LPAREN;
+	} else if (c == ')') { p_temp->cls = &TOK_RPAREN;
+	} else if (c == ',') { p_temp->cls = &TOK_COMMA;
+	} else if (c == ':') { p_temp->cls = &TOK_COLON;
+	} else if (c == ';') { p_temp->cls = &TOK_SEMI;
+	} else if (c == '%') { p_temp->cls = &TOK_MOD;
+	} else if (c == '/') { p_temp->cls = &TOK_DIV;
+	} else if (c == '*') { p_temp->cls = &TOK_MUL;
+	} else if (c == '^') { p_temp->cls = &TOK_EXP;
+	} else if (c == '-') { p_temp->cls = &TOK_SUB;
+	} else if (c == '+') { p_temp->cls = &TOK_ADD;
 	} else {
 		printf("TOKENISATION ERROR %c\n", c);
-		return -1;
+		return NULL;
 	}
 
-	return 0;
+	p_temp                 = p_tokeniser->p_next;
+	p_tokeniser->p_next    = p_tokeniser->p_current;
+	p_tokeniser->p_current = p_temp;
+
+	return p_temp;
 }
 
-void tokeniser_start(struct tokeniser *p_tokeniser, char *buf) {
+static int tokeniser_start(struct tokeniser *p_tokeniser, char *buf) {
 	p_tokeniser->buf = buf;
 	p_tokeniser->lp = 1;
-	p_tokeniser->cur.cls = NULL;
+	p_tokeniser->p_current = &(p_tokeniser->curx);
+	p_tokeniser->p_next = &(p_tokeniser->nextx);
+	return (tok_read(p_tokeniser) == NULL) ? 1 : 0;
 }
 
 struct evaluation_context {
@@ -544,105 +564,84 @@ const struct ast_node *expect_expression(struct evaluation_context *p_workspace,
 const struct ast_node *parse_primary(struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser, const struct ejson_error_handler *p_error_handler) {
 	const struct ast_node *p_temp_nodes[8192];
 	struct ast_node *p_ret = NULL;
+	const struct token *p_token;
 
-	if (p_tokeniser->cur.cls == &TOK_LPAREN) {
+	if ((p_token = tok_read(p_tokeniser)) == NULL)
+		return ejson_error_null(p_error_handler, "no tokens to parse\n");
+
+	if (p_token->cls == &TOK_LPAREN) {
 		const struct ast_node *p_subexpr;
-		if (tokeniser_next(p_tokeniser)) {
-			fprintf(stderr, "expected another token\n");
-			return NULL;
-		}
+
 		if ((p_subexpr = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
-		if (p_tokeniser->cur.cls != &TOK_RPAREN) {
-			fprintf(stderr, "expected close parenthesis\n");
-			return NULL;
-		}
-		if (tokeniser_next(p_tokeniser))
-			return NULL;
+
+		if ((p_token = tok_read(p_tokeniser)) == NULL || p_token->cls != &TOK_RPAREN)
+			return ejson_error_null(p_error_handler, "expected close parenthesis\n");
+
 		return p_subexpr;
 	}
 
-	if (p_tokeniser->cur.cls == &TOK_IDENTIFIER) {
+	if (p_token->cls == &TOK_IDENTIFIER) {
 		const struct istring *k;
 		const struct ast_node **node;
 
-		if ((k = istrings_add(&(p_workspace->strings), p_tokeniser->cur.t.strident.str)) == NULL) {
-			fprintf(stderr, "oom\n");
-			return NULL;
-		}
+		if ((k = istrings_add(&(p_workspace->strings), p_token->t.strident.str)) == NULL)
+			return ejson_error_null(p_error_handler, "oom\n");
 
-		if ((node = (const struct ast_node **)pdict_get(&(p_workspace->workspace), (uintptr_t)(k->cstr))) == NULL) {
-			fprintf(stderr, "'%s' was not found in the workspace\n", k->cstr);
-			return NULL;
-		}
-
-		if (tokeniser_next(p_tokeniser))
-			return NULL;
+		if ((node = (const struct ast_node **)pdict_get(&(p_workspace->workspace), (uintptr_t)(k->cstr))) == NULL)
+			return ejson_error_null(p_error_handler, "'%s' was not found in the workspace\n", k->cstr);
 
 		return *node;
 	}
 
-	if (p_tokeniser->cur.cls == &TOK_LISTVAL) {
-		if (tokeniser_next(p_tokeniser))
-			return NULL;
+	if (p_token->cls == &TOK_LISTVAL) {
 		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls        = &AST_CLS_LISTVAL;
 		if ((p_ret->d.listval.p_list = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
 		if ((p_ret->d.listval.p_index = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
-	} else if (p_tokeniser->cur.cls == &TOK_MAP) {
-		if (tokeniser_next(p_tokeniser))
-			return NULL;
+	} else if (p_token->cls == &TOK_MAP) {
 		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls        = &AST_CLS_MAP;
 		if ((p_ret->d.map.p_function = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
 		if ((p_ret->d.map.p_input_list = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
-	} else if (p_tokeniser->cur.cls == &TOK_INT) {
+	} else if (p_token->cls == &TOK_INT) {
 		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls        = &AST_CLS_LITERAL_INT;
-		p_ret->d.i        = p_tokeniser->cur.t.tint;
-		if (tokeniser_next(p_tokeniser))
-			return NULL;
-	} else if (p_tokeniser->cur.cls == &TOK_FLOAT) {
+		p_ret->d.i        = p_token->t.tint;
+	} else if (p_token->cls == &TOK_FLOAT) {
 		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls        = &AST_CLS_LITERAL_FLOAT;
-		p_ret->d.f        = p_tokeniser->cur.t.tflt;
-		if (tokeniser_next(p_tokeniser))
-			return NULL;
-	} else if (p_tokeniser->cur.cls == &TOK_STRING) {
-		size_t sl           = strlen(p_tokeniser->cur.t.strident.str);
+		p_ret->d.f        = p_token->t.tflt;
+	} else if (p_token->cls == &TOK_STRING) {
+		size_t sl           = strlen(p_token->t.strident.str);
 		char *p_strbuf;
 		p_ret               = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_strbuf            = linear_allocator_alloc(&(p_workspace->alloc), sl + 1);
-		memcpy(p_strbuf, p_tokeniser->cur.t.strident.str, sl + 1);
+		memcpy(p_strbuf, p_token->t.strident.str, sl + 1);
 		p_ret->cls          = &AST_CLS_LITERAL_STRING;
 		p_ret->d.str.hash   = 0;
 		p_ret->d.str.len    = sl;
 		p_ret->d.str.p_data = p_strbuf;
-		if (tokeniser_next(p_tokeniser))
-			return NULL;
-	} else if (p_tokeniser->cur.cls == &TOK_LBRACE) {
+	} else if (p_token->cls == &TOK_LBRACE) {
 		uint_fast32_t    nb_kvs = 0;
-		if (tokeniser_next(p_tokeniser)) {
+		const struct token *p_next;
+		if ((p_next = tok_peek(p_tokeniser)) == NULL) {
 			fprintf(stderr, "expected another token\n");
 			return NULL;
 		}
-		if (p_tokeniser->cur.cls != &TOK_RBRACE) {
+		if (p_next->cls != &TOK_RBRACE) {
 			do {
 				p_temp_nodes[2*nb_kvs+0] = expect_expression(p_workspace, p_tokeniser, p_error_handler);
 				if (p_temp_nodes[2*nb_kvs+0] == NULL) {
 					fprintf(stderr, "expected expression\n");
 					return NULL;
 				}
-				if (p_tokeniser->cur.cls != &TOK_COLON) {
+				if ((p_token = tok_read(p_tokeniser)) == NULL || p_token->cls != &TOK_COLON) {
 					fprintf(stderr, "expected :\n");
-					return NULL;
-				}
-				if (tokeniser_next(p_tokeniser)) {
-					fprintf(stderr, "expected another token\n");
 					return NULL;
 				}
 				p_temp_nodes[2*nb_kvs+1] = expect_expression(p_workspace, p_tokeniser, p_error_handler);
@@ -651,17 +650,17 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 					return NULL;
 				}
 				nb_kvs++;
-				if (p_tokeniser->cur.cls == &TOK_RBRACE)
-					break;
-				if (p_tokeniser->cur.cls != &TOK_COMMA) {
+				if ((p_token = tok_read(p_tokeniser)) == NULL || (p_token->cls != &TOK_RBRACE && p_token->cls != &TOK_COMMA)) {
 					fprintf(stderr, "expected , or }\n");
 					return NULL;
 				}
-				if (tokeniser_next(p_tokeniser)) {
-					fprintf(stderr, "expected another token\n");
-					return NULL;
-				}
+				if (p_token->cls == &TOK_RBRACE)
+					break;
 			} while (1);
+		} else {
+			if (tok_read(p_tokeniser) == NULL) { /* empty dict - skip over } */
+				return NULL;
+			}
 		}
 		p_ret                  = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls             = &AST_CLS_LITERAL_DICT;
@@ -672,31 +671,30 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		} else {
 			p_ret->d.ldict.elements = NULL;
 		}
-		if (tokeniser_next(p_tokeniser))
-			return NULL;
-	} else if (p_tokeniser->cur.cls == &TOK_LSQBR) {
+	} else if (p_token->cls == &TOK_LSQBR) {
 		uint_fast32_t nb_list = 0;
-		if (tokeniser_next(p_tokeniser)) {
+		const struct token *p_next;
+		if ((p_next = tok_peek(p_tokeniser)) == NULL) {
 			fprintf(stderr, "expected another token\n");
 			return NULL;
 		}
-		if (p_tokeniser->cur.cls != &TOK_RSQBR) {
+		if (p_next->cls != &TOK_RSQBR) {
 			do {
 				p_temp_nodes[nb_list] = expect_expression(p_workspace, p_tokeniser, p_error_handler);
 				if (p_temp_nodes[nb_list] == NULL)
 					return NULL;
 				nb_list++;
-				if (p_tokeniser->cur.cls == &TOK_RSQBR)
-					break;
-				if (p_tokeniser->cur.cls != &TOK_COMMA) {
+				if ((p_token = tok_read(p_tokeniser)) == NULL || (p_token->cls != &TOK_RSQBR && p_token->cls != &TOK_COMMA)) {
 					fprintf(stderr, "expected , or ]\n");
 					return NULL;
 				}
-				if (tokeniser_next(p_tokeniser)) {
-					fprintf(stderr, "expected another token\n");
-					return NULL;
-				}
+				if (p_token->cls == &TOK_RSQBR)
+					break;
 			} while (1);
+		} else {
+			if (tok_read(p_tokeniser) == NULL) { /* empty list - skip over ] */
+				return NULL;
+			}
 		}
 		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls        = &AST_CLS_LITERAL_LIST;
@@ -707,14 +705,8 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		} else {
 			p_ret->d.llist.elements = NULL;
 		}
-		if (tokeniser_next(p_tokeniser))
-			return NULL;
-	} else if (p_tokeniser->cur.cls == &TOK_SUB) {
+	} else if (p_token->cls == &TOK_SUB) {
 		const struct ast_node *p_next;
-		if (tokeniser_next(p_tokeniser)) {
-			fprintf(stderr, "expected another token after -\n");
-			return NULL;
-		}
 		/* TODO: This sucks we can have unary unary unary unary unary.... don't want. */
 		p_next = expect_expression(p_workspace, p_tokeniser, p_error_handler);
 		if (p_next == NULL)
@@ -723,73 +715,59 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		p_ret->cls           = &AST_CLS_NEG;
 		p_ret->d.binop.p_lhs = p_next;
 		p_ret->d.binop.p_rhs = NULL;
-	} else if (p_tokeniser->cur.cls == &TOK_NULL) {
+	} else if (p_token->cls == &TOK_NULL) {
 		p_ret        = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls   = &AST_CLS_LITERAL_NULL;
-		if (tokeniser_next(p_tokeniser))
-			return NULL;
-	} else if (p_tokeniser->cur.cls == &TOK_TRUE) {
+	} else if (p_token->cls == &TOK_TRUE) {
 		p_ret      = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls = &AST_CLS_LITERAL_BOOL;
 		p_ret->d.i = 1;
-		if (tokeniser_next(p_tokeniser))
-			return NULL;
-	} else if (p_tokeniser->cur.cls == &TOK_FALSE) {
+	} else if (p_token->cls == &TOK_FALSE) {
 		p_ret      = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls = &AST_CLS_LITERAL_BOOL;
 		p_ret->d.i = 0;
-		if (tokeniser_next(p_tokeniser))
-			return NULL;
-	} else if (p_tokeniser->cur.cls == &TOK_RANGE) {
+	} else if (p_token->cls == &TOK_RANGE) {
 		p_ret        = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls   = &AST_CLS_RANGE;
-		if (tokeniser_next(p_tokeniser))
-			return NULL;
 		if ((p_ret->d.builtin.p_args = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
-	} else if (p_tokeniser->cur.cls == &TOK_FORMAT) {
+	} else if (p_token->cls == &TOK_FORMAT) {
 		p_ret        = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls   = &AST_CLS_FORMAT;
-		if (tokeniser_next(p_tokeniser))
-			return NULL;
 		if ((p_ret->d.builtin.p_args = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
-	} else if (p_tokeniser->cur.cls == &TOK_FUNC) {
+	} else if (p_token->cls == &TOK_FUNC) {
 		unsigned        nb_args = 0;
 		unsigned        i;
 		struct ast_node args[32];
 		uintptr_t       argnames[32];
 
-		if (tokeniser_next(p_tokeniser)) {
-			fprintf(stderr, "expected another token after func\n");
-			return NULL;
-		}
-		if (p_tokeniser->cur.cls != &TOK_LPAREN) {
+		if ((p_token = tok_read(p_tokeniser)) == NULL || p_token->cls != &TOK_LPAREN) {
 			fprintf(stderr, "expected (\n");
 			return NULL;
 		}
-		if (tokeniser_next(p_tokeniser)) {
+		if ((p_token = tok_read(p_tokeniser)) == NULL) {
 			fprintf(stderr, "expected another token after (\n");
 			return NULL;
 		}
-		if (p_tokeniser->cur.cls != &TOK_RPAREN) {
+		if (p_token->cls != &TOK_RPAREN) {
 			do {
 				const struct istring *k;
 				void **node;
-				if (p_tokeniser->cur.cls != &TOK_IDENTIFIER) {
-					fprintf(stderr, "function parameter names must be identifiers %s\n", p_tokeniser->cur.cls->name);
+				if (p_token->cls != &TOK_IDENTIFIER) {
+					fprintf(stderr, "function parameter names must be identifiers %s\n", p_token->cls->name);
 					return NULL;
 				}
-				k = istrings_add(&(p_workspace->strings), p_tokeniser->cur.t.strident.str);
+				k = istrings_add(&(p_workspace->strings), p_token->t.strident.str);
 				if (k == NULL) {
 					fprintf(stderr, "oom\n");
 					return NULL;
 				}
-				if (tokeniser_next(p_tokeniser)) {
+				if ((p_token = tok_read(p_tokeniser)) == NULL) {
 					fprintf(stderr, "expected another token\n");
 					return NULL;
 				}
-				if (p_tokeniser->cur.cls != &TOK_COMMA && p_tokeniser->cur.cls != &TOK_RPAREN) {
+				if (p_token->cls != &TOK_COMMA && p_token->cls != &TOK_RPAREN) {
 					fprintf(stderr, "expected , or )\n");
 					return NULL;
 				}
@@ -808,18 +786,14 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 				}
 				nb_args++;
 
-				if (p_tokeniser->cur.cls == &TOK_RPAREN)
+				if (p_token->cls == &TOK_RPAREN)
 					break;
 
-				if (tokeniser_next(p_tokeniser)) {
-					fprintf(stderr, "expected another token\n");
+				if ((p_token = tok_read(p_tokeniser)) == NULL) {
+					fprintf(stderr, "expected another token after ,\n");
 					return NULL;
 				}
 			} while (1);
-		}
-		if (tokeniser_next(p_tokeniser)) {
-			fprintf(stderr, "expected another token after )\n");
-			return NULL;
 		}
 
 		p_workspace->stack_depth += nb_args;
@@ -837,17 +811,10 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 			}
 		}
 
-		if (p_ret->d.fn.node == NULL) {
-			fprintf(stderr, "expected expression for function body\n");
-			return NULL;
-		}
+		if (p_ret->d.fn.node == NULL)
+			return ejson_error_null(p_error_handler, "expected expression for function expression\n");
 
-
-	} else if (p_tokeniser->cur.cls == &TOK_CALL) {
-		if (tokeniser_next(p_tokeniser)) {
-			fprintf(stderr, "expected identifier\n");
-			return NULL;
-		}
+	} else if (p_token->cls == &TOK_CALL) {
 		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls        = &AST_CLS_CALL;
 		p_ret->d.call.fn  = expect_expression(p_workspace, p_tokeniser, p_error_handler);
@@ -862,7 +829,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 			return NULL;
 		}
 	} else {
-		token_print(&(p_tokeniser->cur));
+		token_print(p_token);
 		abort();
 	}
 
@@ -871,40 +838,45 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 }
 
 const struct ast_node *expect_expression_1(const struct ast_node *p_lhs, struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser, int min_precedence, const struct ejson_error_handler *p_error_handler) {
+	const struct token *p_token;
+
 	while
-	    (   p_tokeniser->cur.cls->precedence > 0 /* lookahead is a binary operator */
-		&&  p_tokeniser->cur.cls->precedence >= min_precedence /* whose precedence is >= min_precedence */
-		) {
+	    (   (p_token = tok_peek(p_tokeniser)) != NULL
+	    &&  p_token->cls->precedence > 0 /* lookahead is a binary operator */
+	    &&  p_token->cls->precedence >= min_precedence /* whose precedence is >= min_precedence */
+	    ) {
 		const struct ast_node *p_rhs;
 		struct ast_node *p_comb;
-		const struct tok_def *p_op = p_tokeniser->cur.cls;
+		const struct tok_def *p_op = p_token->cls;
 
-		if (tokeniser_next(p_tokeniser))
-			return NULL;
+		p_token = tok_read(p_tokeniser); /* Skip over the operator */
+		assert(p_token != NULL);
 
 		if ((p_rhs = parse_primary(p_workspace, p_tokeniser, p_error_handler)) == NULL)
-			return NULL;
+			return ejson_error_null(p_error_handler, "could not parse primary\n");
 	
 		while
-		    (   p_tokeniser->cur.cls->precedence > 0 /* lookahead is a binary operator */
-		    &&  (   p_tokeniser->cur.cls->precedence > p_op->precedence  /* whose precedence is greater than op's */
-		        ||  (p_tokeniser->cur.cls->right_associative && p_tokeniser->cur.cls->precedence == p_op->precedence) /* or a right-associative operator whose precedence is equal to op's */
+		    (   (p_token = tok_peek(p_tokeniser)) != NULL
+		    &&   p_token->cls->precedence > 0 /* lookahead is a binary operator */
+		    &&  (   p_token->cls->precedence > p_op->precedence  /* whose precedence is greater than op's */
+		        ||  (p_token->cls->right_associative && p_token->cls->precedence == p_op->precedence) /* or a right-associative operator whose precedence is equal to op's */
 		        )
 			) {
-			if ((p_rhs = expect_expression_1(p_rhs, p_workspace, p_tokeniser, p_tokeniser->cur.cls->precedence, p_error_handler)) == NULL)
-				return NULL;
+			if ((p_rhs = expect_expression_1(p_rhs, p_workspace, p_tokeniser, p_token->cls->precedence, p_error_handler)) == NULL)
+				return ejson_error_null(p_error_handler, "could not parse RHS\n");
 		}
 
 		assert(p_op->bin_op_cls != NULL);
 
 		if ((p_comb = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
-			return NULL;
+			return ejson_error_null(p_error_handler, "oom\n");
 
 		p_comb->cls           = p_op->bin_op_cls;
 		p_comb->d.binop.p_lhs = p_lhs;
 		p_comb->d.binop.p_rhs = p_rhs;
 		p_lhs = p_comb;
 	}
+
 
 	return p_lhs;
 }
@@ -1523,26 +1495,33 @@ static int to_jnode(struct jnode *p_node, const struct ast_node *p_ast, struct l
 int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser, struct ejson_error_handler *p_error_handler) {
 	const struct ast_node *p_obj;
 	const struct ast_node *p_root;
-	while (p_tokeniser->cur.cls == &TOK_DEFINE) {
+	const struct token *p_token;
+
+	while ((p_token = tok_peek(p_tokeniser)) != NULL && p_token->cls == &TOK_DEFINE) {
 		const struct istring *p_key;
 		void **pp_obj;
-		if (tokeniser_next(p_tokeniser) || p_tokeniser->cur.cls != &TOK_IDENTIFIER)
+		if ((p_token = tok_read(p_tokeniser)) == NULL) /* skip over define */
+			return ejson_error(p_error_handler, "no tokens to read\n");
+
+		if ((p_token = tok_read(p_tokeniser)) == NULL || p_token->cls != &TOK_IDENTIFIER)
 			return ejson_error(p_error_handler, "expected an identifier token after '@'\n");
-		if ((p_key = istrings_add(&(p_workspace->strings), p_tokeniser->cur.t.strident.str)) == NULL)
+		if ((p_key = istrings_add(&(p_workspace->strings), p_token->t.strident.str)) == NULL)
 			return ejson_error(p_error_handler, "out of memory\n");
 		if ((pp_obj = pdict_get(&(p_workspace->workspace), (uintptr_t)(p_key->cstr))) != NULL)
-			return ejson_error(p_error_handler, "cannot redefine variable '%s'\n", p_tokeniser->cur.t.strident.str);
-		if (tokeniser_next(p_tokeniser) || p_tokeniser->cur.cls != &TOK_EQ)
+			return ejson_error(p_error_handler, "cannot redefine variable '%s'\n", p_token->t.strident.str);
+		if ((p_token = tok_read(p_tokeniser)) == NULL || p_token->cls != &TOK_EQ)
 			return ejson_error(p_error_handler, "expected '='\n");
-		if (tokeniser_next(p_tokeniser) || (p_obj = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
+		if ((p_obj = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return ejson_error(p_error_handler, "expected an expression\n");
-		if (p_tokeniser->cur.cls != &TOK_SEMI || tokeniser_next(p_tokeniser))
+		if ((p_token = tok_read(p_tokeniser)) == NULL || p_token->cls != &TOK_SEMI)
 			return ejson_error(p_error_handler, "expected ';'\n");
 		if (pdict_set(&(p_workspace->workspace), (uintptr_t)(p_key->cstr), (void *)p_obj))
 			return ejson_error(p_error_handler, "out of memory\n");
 	}
 	if ((p_obj = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 		return ejson_error(p_error_handler, "expected main document expression\n");
+	if ((p_token = tok_read(p_tokeniser)) != NULL)
+		return ejson_error(p_error_handler, "expected no more tokens - got '%s'\n", p_token->cls->name);
 	if ((p_root = evaluate_ast(p_obj, NULL, 0, &(p_workspace->alloc), p_error_handler)) == NULL)
 		return ejson_error(p_error_handler, "unable to evaluate root document node\n");
 	if (to_jnode(p_node, p_root, &(p_workspace->alloc), p_error_handler))
@@ -1582,23 +1561,22 @@ int run_test(const char *p_ejson, const char *p_ref, const char *p_name) {
 	err.p_context = NULL;
 	err.on_parser_error = on_parser_error;
 
-	tokeniser_start(&t, (char *)p_ejson);
-
-	if (tokeniser_next(&t))
-		return unexpected_fail("expected a token in the reference\n");
+	if (tokeniser_start(&t, (char *)p_ejson))
+		return unexpected_fail("could not init tokeniser\n");
 
 	if (evaluation_context_init(&ws))
 		return unexpected_fail("could not init workspace\n");
 
 	if (parse_document(&dut, &ws, &t, &err)) {
 		if (p_ref != NULL) {
-			fprintf(stderr, "test '%s' failed due to above messages.\n", p_name);
-			return (fprintf(stderr, "could not parse dut:\n  %s\n", p_ejson), -1);
+			fprintf(stderr, "FAILED: test '%s' failed due to above messages.\n", p_name);
+			return -1;
 		} else {
-			printf("xtest '%s' passed.\n", p_name);
+			printf("PASSED: xtest '%s'\n", p_name);
 		}
 	} else if (p_ref == NULL) {
-		printf("xtest '%s' failed because it generated a node.\n", p_name);
+		printf("FAILED: xtest '%s' generated a node.\n", p_name);
+		return -1;
 	}
 
 	if (p_ref != NULL) {
@@ -1627,7 +1605,7 @@ int run_test(const char *p_ejson, const char *p_ref, const char *p_name) {
 			return -1;
 		}
 
-		printf("test '%s' passed.\n", p_name);
+		printf("PASSED: test '%s'.\n", p_name);
 	}
 
 	return 0;
@@ -1884,7 +1862,7 @@ int main(int argc, char *argv[]) {
 	run_test
 		("call listval [func(x) x+1, func(x) x+2, func(x) x+3] 1 [10]"
 		,"12"
-		,"test calling a function that is in a list of cuntions"
+		,"test calling a function that is in a list of functions"
 		);
 
 	/* Expected fail tests */
@@ -1917,6 +1895,16 @@ int main(int argc, char *argv[]) {
 		("call func(x) x [1, 2]"
 		,NULL
 		,"call a function with incorrect number of arguments (1)"
+		);
+	run_test
+		("9 + ("
+		,NULL
+		,"expect expression after ("
+		);
+	run_test
+		("9 + 8 * k"
+		,NULL
+		,"failure to parse rhs due to identifier not existing"
 		);
 
 
