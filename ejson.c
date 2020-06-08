@@ -258,6 +258,8 @@ DEF_AST_CLS(AST_CLS_LISTVAL,         NULL, debug_print_listval);
 DEF_AST_CLS(AST_CLS_MAP,             NULL, debug_print_map);
 DEF_AST_CLS(AST_CLS_FORMAT,          NULL, debug_print_builtin);
 DEF_AST_CLS(AST_CLS_STACKREF,        NULL, debug_print_int_like);
+
+
 DEF_AST_CLS(AST_CLS_LIST_GENERATOR,  NULL, debug_list_generator);
 DEF_AST_CLS(AST_CLS_READY_DICT,      NULL, debug_ready_dict);
 
@@ -922,10 +924,6 @@ struct execution_context {
 
 const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct ast_node **pp_stackx, unsigned stack_sizex, struct linear_allocator *p_alloc, struct ejson_error_handler *p_error_handler);
 
-static struct ast_node *get_template(struct linear_allocator *p_alloc, const struct ast_node *p_src) {
-	return linear_allocator_alloc(p_alloc, sizeof(struct ast_node));
-}
-
 struct lrange {
 	long long first;
 	long long step_size;
@@ -939,7 +937,7 @@ const struct ast_node *ast_list_generator_get_element(const struct ast_node *p_l
 	if (element >= p_list->d.lgen.nb_elements)
 		return (ejson_error(p_error_handler, "list index out of range\n"), NULL);
 
-	p_dest = get_template(p_alloc, p_list);
+	p_dest = linear_allocator_alloc(p_alloc, sizeof(struct ast_node));
 	p_dest->cls = &AST_CLS_LITERAL_INT;
 	p_dest->d.i   = p_list->d.lgen.d.range.first + p_list->d.lgen.d.range.step * (long long)element;
 	return p_dest;
@@ -1007,7 +1005,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 
 	/* Convert lists into list generators */
 	if  (p_src->cls == &AST_CLS_LITERAL_LIST) {
-		struct ast_node        *p_ret   = get_template(p_alloc, p_src);
+		struct ast_node        *p_ret   = linear_allocator_alloc(p_alloc, sizeof(struct ast_node));
 		const struct ast_node **pp_list = linear_allocator_alloc(p_alloc, sizeof(struct ast_node *) * p_src->d.llist.nb_elements);
 		unsigned                   i;
 		for (i = 0; i < p_src->d.llist.nb_elements; i++) {
@@ -1151,7 +1149,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 			*pp_ipos = p_iter;
 		}
 
-		struct ast_node *p_ret = get_template(p_alloc, p_src);
+		struct ast_node *p_ret = linear_allocator_alloc(p_alloc, sizeof(struct ast_node));
 		p_ret->cls                = &AST_CLS_READY_DICT;
 		p_ret->d.rdict.pp_stack   = pp_stackx;
 		p_ret->d.rdict.stack_size = stack_sizex;
@@ -1217,7 +1215,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 
 	/* Unary negation */
 	if (p_src->cls == &AST_CLS_NEG) {
-		struct ast_node *p_tmp2 = get_template(p_alloc, p_src);
+		struct ast_node *p_tmp2 = linear_allocator_alloc(p_alloc, sizeof(struct ast_node));
 		size_t save                = linear_allocator_save(p_alloc);
 		const struct ast_node *p_result;
 
@@ -1243,7 +1241,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 
 	/* Convert range into an accessor object */
 	if (p_src->cls == &AST_CLS_RANGE) {
-		struct ast_node       *p_result = get_template(p_alloc, p_src);
+		struct ast_node       *p_result = linear_allocator_alloc(p_alloc, sizeof(struct ast_node));
 		size_t                    save     = linear_allocator_save(p_alloc);
 		struct lrange             lrange;
 		const struct ast_node *p_args;
@@ -1311,7 +1309,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		if ((p_list = evaluate_ast(p_src->d.map.p_input_list, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL || p_list->cls != &AST_CLS_LIST_GENERATOR)
 			return (ejson_error(p_error_handler, "map expected a list argument following the function\n"), NULL);
 
-		p_tmp = get_template(p_alloc, p_src);
+		p_tmp = linear_allocator_alloc(p_alloc, sizeof(struct ast_node));
 		p_tmp->cls                     = &AST_CLS_LIST_GENERATOR;
 		p_tmp->d.lgen.pp_stack         = pp_stackx;
 		p_tmp->d.lgen.stack_size       = stack_sizex;
@@ -1329,7 +1327,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		struct ast_node *p_ret;
 		size_t save;
 		
-		p_ret       = get_template(p_alloc, p_src);
+		p_ret       = linear_allocator_alloc(p_alloc, sizeof(struct ast_node));
 		
 		save        = linear_allocator_save(p_alloc);
 
