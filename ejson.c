@@ -343,8 +343,12 @@ static void token_print(const struct token *p_token) {
 /* peek: return p_next */
 /* next: load next thing into p_current, swap p_current and p_next, return p_current */
 
-const struct token *tok_peek(struct tokeniser *p_tokeniser) {
+const struct token *tok_peek(const struct tokeniser *p_tokeniser) {
 	return p_tokeniser->p_next;
+}
+
+void tok_get_nearest_location(const struct tokeniser *p_tokeniser, struct token_pos_info *p_tpi) {
+	*p_tpi = (p_tokeniser->p_next != NULL) ? p_tokeniser->p_next->posinfo : p_tokeniser->p_current->posinfo;
 }
 
 const struct token *tok_read(struct tokeniser *p_tokeniser) {
@@ -376,9 +380,12 @@ const struct token *tok_read(struct tokeniser *p_tokeniser) {
 	/* nothing left */
 	if (c == '\0') {
 		p_tokeniser->buf--;
-		p_temp = p_tokeniser->p_next;
-		p_tokeniser->p_next = NULL;
-		return p_temp;
+		if (p_tokeniser->p_next != NULL) {
+			p_tokeniser->p_current = p_tokeniser->p_next;
+			p_tokeniser->p_next = NULL;
+			return p_tokeniser->p_current;
+		}
+		return p_tokeniser->p_next;
 	}
 
 	assert(c != '#');
@@ -583,18 +590,24 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 	const struct ast_node *p_temp_nodes[8192];
 	struct ast_node *p_ret = NULL;
 	const struct token *p_token;
+	struct token_pos_info tpi;
 
-	if ((p_token = tok_read(p_tokeniser)) == NULL)
-		return ejson_error_null(p_error_handler, "failed to read another token because\n");
+	if ((p_token = tok_read(p_tokeniser)) == NULL) {
+		tok_get_nearest_location(p_tokeniser, &tpi);
+		return ejson_location_error_null(p_error_handler, &tpi, "failed to read another token near location because\n");
+	}
+
+	tpi = p_token->posinfo;
 
 	if (p_token->cls == &TOK_LPAREN) {
 		const struct ast_node *p_subexpr;
 
 		if ((p_subexpr = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
-			return ejson_error_null(p_error_handler, "failed to read expression after ( because\n");
+			return ejson_location_error_null(p_error_handler, &tpi, "failed to parse expression near the location because\n");
 
+		tok_get_nearest_location(p_tokeniser, &tpi);
 		if ((p_token = tok_read(p_tokeniser)) == NULL)
-			return ejson_error_null(p_error_handler, "failed to read another token because\n");
+			return ejson_location_error_null(p_error_handler, &tpi, "failed to read a close parenthesis token near location because\n");
 
 		if (p_token->cls != &TOK_RPAREN)
 			return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "expected close parenthesis\n");
@@ -608,24 +621,30 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		if ((k = istrings_add(&(p_workspace->strings), p_token->t.strident.str)) == NULL)
 			return ejson_error_null(p_error_handler, "out of memory\n");
 		if ((node = (const struct ast_node **)pdict_get(&(p_workspace->workspace), (uintptr_t)(k->cstr))) == NULL)
-			return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "'%s' was not found in the workspace\n", k->cstr);
+			return ejson_location_error_null(p_error_handler, &tpi, "'%s' was not found in the workspace\n", k->cstr);
 		return *node;
 	}
 
 	if (p_token->cls == &TOK_LISTVAL) {
-		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
+		if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
+			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->cls        = &AST_CLS_LISTVAL;
+		tok_get_nearest_location(p_tokeniser, &tpi);
 		if ((p_ret->d.listval.p_list = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
-			return ejson_error_null(p_error_handler, "could not parse the listval list expression because\n");
+			return ejson_location_error_null(p_error_handler, &tpi, "could not parse the listval list expression near the location because\n");
+		tok_get_nearest_location(p_tokeniser, &tpi);
 		if ((p_ret->d.listval.p_index = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
-			return ejson_error_null(p_error_handler, "could not parse the listval index expression because\n");
+			return ejson_location_error_null(p_error_handler, &tpi, "could not parse the listval index expression near the location because\n");
 	} else if (p_token->cls == &TOK_MAP) {
-		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
+		if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
+			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->cls        = &AST_CLS_MAP;
+		tok_get_nearest_location(p_tokeniser, &tpi);
 		if ((p_ret->d.map.p_function = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
-			return ejson_error_null(p_error_handler, "could not parse the map function expression because\n");
+			return ejson_location_error_null(p_error_handler, &tpi, "could not parse the map function expression near the location because\n");
+		tok_get_nearest_location(p_tokeniser, &tpi);
 		if ((p_ret->d.map.p_input_list = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
-			return ejson_error_null(p_error_handler, "could not parse the map data expression because\n");
+			return ejson_location_error_null(p_error_handler, &tpi, "could not parse the map data expression near the location because\n");
 	} else if (p_token->cls == &TOK_INT) {
 		if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
 			return ejson_error_null(p_error_handler, "out of memory\n");
@@ -702,17 +721,17 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 				if (p_temp_nodes[nb_list] == NULL)
 					return ejson_error_null(p_error_handler, "failed to evaluate the expression for list element %d because\n", nb_list);
 				nb_list++;
-				if ((p_token = tok_read(p_tokeniser)) == NULL || (p_token->cls != &TOK_RSQBR && p_token->cls != &TOK_COMMA)) {
-					fprintf(stderr, "expected , or ]\n");
-					return NULL;
-				}
+				tok_get_nearest_location(p_tokeniser, &tpi);
+				if ((p_token = tok_read(p_tokeniser)) == NULL)
+					return ejson_location_error_null(p_error_handler, &tpi, "failed to get a , or ] token near location because\n");
+				if (p_token->cls != &TOK_RSQBR && p_token->cls != &TOK_COMMA)
+					return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "the token was neither , nor ]\n");
 				if (p_token->cls == &TOK_RSQBR)
 					break;
 			} while (1);
 		} else {
-			if (tok_read(p_tokeniser) == NULL) { /* empty list - skip over ] */
-				return NULL;
-			}
+			p_token = tok_read(p_tokeniser);
+			assert(p_token != NULL && "peeked a valid token but could not skip over it");
 		}
 		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls        = &AST_CLS_LITERAL_LIST;
@@ -729,28 +748,34 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		p_next = expect_expression(p_workspace, p_tokeniser, p_error_handler);
 		if (p_next == NULL)
 			return NULL;
-		p_ret                = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
+		if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
+			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->cls           = &AST_CLS_NEG;
 		p_ret->d.binop.p_lhs = p_next;
 		p_ret->d.binop.p_rhs = NULL;
 	} else if (p_token->cls == &TOK_NULL) {
-		p_ret        = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
+		if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
+			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->cls   = &AST_CLS_LITERAL_NULL;
 	} else if (p_token->cls == &TOK_TRUE) {
-		p_ret      = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
+		if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
+			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->cls = &AST_CLS_LITERAL_BOOL;
 		p_ret->d.i = 1;
 	} else if (p_token->cls == &TOK_FALSE) {
-		p_ret      = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
+		if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
+			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->cls = &AST_CLS_LITERAL_BOOL;
 		p_ret->d.i = 0;
 	} else if (p_token->cls == &TOK_RANGE) {
-		p_ret        = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
+		if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
+			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->cls   = &AST_CLS_RANGE;
 		if ((p_ret->d.builtin.p_args = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
 	} else if (p_token->cls == &TOK_FORMAT) {
-		p_ret        = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
+		if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
+			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->cls   = &AST_CLS_FORMAT;
 		if ((p_ret->d.builtin.p_args = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
@@ -760,35 +785,36 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		struct ast_node args[32];
 		uintptr_t       argnames[32];
 
+		tpi = p_token->posinfo;
 		if ((p_token = tok_read(p_tokeniser)) == NULL)
-			return ejson_error_null(p_error_handler, "failed to get another token because\n");
+			return ejson_location_error_null(p_error_handler, &tpi, "failed to get another token near location because\n");
 
 		if (p_token->cls != &TOK_LPAREN)
 			return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "an open parenthesis was expected\n");
 
+		tpi = p_token->posinfo;
 		if ((p_token = tok_read(p_tokeniser)) == NULL)
-			return ejson_error_null(p_error_handler, "failed to get another token after ( because\n");
+			return ejson_location_error_null(p_error_handler, &tpi, "failed to get another token near location because\n");
 
 		if (p_token->cls != &TOK_RPAREN) {
 			do {
 				const struct istring *k;
+				struct token_pos_info identpos;
 				void **node;
+				identpos = p_token->posinfo;
 				if (p_token->cls != &TOK_IDENTIFIER)
 					return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "expected a parameter name literal but got a %s token\n", p_token->cls->name);
 				if ((k = istrings_add(&(p_workspace->strings), p_token->t.strident.str)) == NULL)
 					return ejson_error_null(p_error_handler, "out of memory\n");
-				if ((p_token = tok_read(p_tokeniser)) == NULL) {
-					fprintf(stderr, "expected another token\n");
-					return NULL;
-				}
+				tpi = p_token->posinfo;
+				if ((p_token = tok_read(p_tokeniser)) == NULL)
+					return ejson_location_error_null(p_error_handler, &tpi, "failed to get another token near location because\n");
 				if (p_token->cls != &TOK_COMMA && p_token->cls != &TOK_RPAREN)
 					return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "a comma or close parenthesis was expected\n");
 				argnames[nb_args] = (uintptr_t)(k->cstr);
 				node = pdict_get(&(p_workspace->workspace), argnames[nb_args]);
-				if (node != NULL) {
-					fprintf(stderr, "function parameter names may only appear ones and must alias workspace variables (%s)\n", k->cstr);
-					return NULL;
-				}
+				if (node != NULL)
+					return ejson_location_error_null(p_error_handler, &identpos, "function parameter names may only appear once and must alias workspace variables\n");
 				args[nb_args].cls = &AST_CLS_STACKREF;
 				args[nb_args].d.i = p_workspace->stack_depth + nb_args + 1;
 				if (pdict_set(&(p_workspace->workspace), argnames[nb_args], &(args[nb_args])))
@@ -851,12 +877,13 @@ const struct ast_node *expect_expression_1(const struct ast_node *p_lhs, struct 
 		const struct ast_node *p_rhs;
 		struct ast_node *p_comb;
 		const struct tok_def *p_op = p_token->cls;
+		struct token_pos_info loc_info = p_token->posinfo;
 
 		p_token = tok_read(p_tokeniser); /* Skip over the operator */
 		assert(p_token != NULL);
 
 		if ((p_rhs = parse_primary(p_workspace, p_tokeniser, p_error_handler)) == NULL)
-			return ejson_error_null(p_error_handler, "failed to parse primary because\n");
+			return ejson_location_error_null(p_error_handler, &loc_info, "failed to parse primary near the location because\n");
 	
 		while
 		    (   (p_token = tok_peek(p_tokeniser)) != NULL
@@ -866,7 +893,7 @@ const struct ast_node *expect_expression_1(const struct ast_node *p_lhs, struct 
 		        )
 			) {
 			if ((p_rhs = expect_expression_1(p_rhs, p_workspace, p_tokeniser, p_token->cls->precedence, p_error_handler)) == NULL)
-				return ejson_error_null(p_error_handler, "failed to parse RHS of expression because\n");
+				return NULL; /* No error message is needed here. The recursion guarantees that the previous error will trigger at the same token. */
 		}
 
 		assert(p_op->bin_op_cls != NULL);
@@ -1977,6 +2004,57 @@ int main(int argc, char *argv[]) {
 		,NULL
 		,"func cannot parse function body"
 		);
+	run_test
+		("func (sadsa, sadsa) 1"
+		,NULL
+		,"func arguments must not alias each other"
+		);
+	run_test
+		("define sadsa = 1; func (sadsa) 1"
+		,NULL
+		,"func arguments must not alias workspace variables"
+		);
+	run_test
+		("listval"
+		,NULL
+		,"listval no tokens for first expression"
+		);
+	run_test
+		("listval [1"
+		,NULL
+		,"listval could not parse first expression"
+		);
+	run_test
+		("listval 1"
+		,NULL
+		,"listval no tokens for second expression"
+		);
+	run_test
+		("listval 1 [1"
+		,NULL
+		,"listval could not parse second expression"
+		);
+	run_test
+		("map"
+		,NULL
+		,"map no tokens for first expression"
+		);
+	run_test
+		("map [1"
+		,NULL
+		,"map could not parse first expression"
+		);
+	run_test
+		("map 1"
+		,NULL
+		,"map no tokens for second expression"
+		);
+	run_test
+		("map 1 [1"
+		,NULL
+		,"map could not parse second expression"
+		);
+
 
 #if 0
 	/* This is more an experiment than a test. */
