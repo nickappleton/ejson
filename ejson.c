@@ -760,11 +760,8 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 				void **node;
 				if (p_token->cls != &TOK_IDENTIFIER)
 					return ejson_error_null(p_error_handler, "expected a parameter name literal but got a %s token\n", p_token->cls->name);
-				k = istrings_add(&(p_workspace->strings), p_token->t.strident.str);
-				if (k == NULL) {
-					fprintf(stderr, "oom\n");
-					return NULL;
-				}
+				if ((k = istrings_add(&(p_workspace->strings), p_token->t.strident.str)) == NULL)
+					return ejson_error_null(p_error_handler, "out of memory\n");
 				if ((p_token = tok_read(p_tokeniser)) == NULL) {
 					fprintf(stderr, "expected another token\n");
 					return NULL;
@@ -780,10 +777,8 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 				}
 				args[nb_args].cls = &AST_CLS_STACKREF;
 				args[nb_args].d.i = p_workspace->stack_depth + nb_args + 1;
-				if (pdict_set(&(p_workspace->workspace), argnames[nb_args], &(args[nb_args]))) {
-					fprintf(stderr, "oom\n");
-					return NULL;
-				}
+				if (pdict_set(&(p_workspace->workspace), argnames[nb_args], &(args[nb_args])))
+					return ejson_error_null(p_error_handler, "out of memory\n");
 				nb_args++;
 
 				if (p_token->cls == &TOK_RPAREN)
@@ -863,7 +858,7 @@ const struct ast_node *expect_expression_1(const struct ast_node *p_lhs, struct 
 		assert(p_op->bin_op_cls != NULL);
 
 		if ((p_comb = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
-			return ejson_error_null(p_error_handler, "oom\n");
+			return ejson_error_null(p_error_handler, "out of memory\n");
 
 		p_comb->cls           = p_op->bin_op_cls;
 		p_comb->d.binop.p_lhs = p_lhs;
@@ -920,7 +915,7 @@ const struct ast_node *ast_list_generator_get_element(const struct ast_node *p_l
 	if (element >= p_list->d.lgen.nb_elements)
 		return (ejson_error(p_error_handler, "list index out of range\n"), NULL);
 	if ((p_dest = linear_allocator_alloc(p_alloc, sizeof(struct ast_node))) == NULL)
-		return (ejson_error(p_error_handler, "oom\n"), NULL);
+		return ejson_error_null(p_error_handler, "out of memory\n");
 	p_dest->cls = &AST_CLS_LITERAL_INT;
 	p_dest->d.i = p_list->d.lgen.d.range.first + p_list->d.lgen.d.range.step * (long long)element;
 	return p_dest;
@@ -954,7 +949,7 @@ const struct ast_node *ast_list_generator_map(const struct ast_node *p_src, unsi
 	if ((p_argument = p_list->d.lgen.get_element(p_list, element, p_alloc, p_error_handler)) == NULL)
 		return (ejson_error(p_error_handler, "could not get list item\n"), NULL);
 	if ((pp_tmp = linear_allocator_alloc(p_alloc, sizeof(struct ast_node *) * (p_src->d.lgen.stack_size + 1))) == NULL)
-		return (ejson_error(p_error_handler, "oom\n"), NULL);
+		return ejson_error_null(p_error_handler, "out of memory\n");
 	if (p_src->d.lgen.stack_size)
 		memcpy(pp_tmp, p_src->d.lgen.pp_stack, p_src->d.lgen.stack_size * sizeof(struct ast_node *));
 	pp_tmp[p_src->d.lgen.stack_size] = p_argument;
