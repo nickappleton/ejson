@@ -15,7 +15,9 @@ struct jnode;
 
 /* return < 0 to signal termination due to error
  * return > 0 to signal graceful termination
- * return 0 to continue enumerating */
+ * return 0 to continue enumerating
+ * the lifetime of the key exists for the life of the parent dictionary.
+ * the lifetime of the jnode value is only for the lifetime of the callback function. */
 typedef int (jdict_enumerate_fn)(struct jnode *p_dest, const char *p_key, void *p_userctx);
 
 struct jnode {

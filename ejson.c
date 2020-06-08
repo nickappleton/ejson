@@ -20,20 +20,26 @@
 #endif
 
 #ifndef ejson_error
-static int ejson_error_fn(const struct ejson_error_handler *p_handler, const char *p_format, ...) {
+static int ejson_error_fn(const struct ejson_error_handler *p_handler, const struct token_pos_info *p_location, const char *p_format, ...) {
 	if (p_handler != NULL) {
 		va_list args;
 		va_start(args, p_format);
-		p_handler->on_parser_error(p_handler->p_context, p_format, args);
+		p_handler->on_parser_error(p_handler->p_context, p_location, p_format, args);
 		va_end(args);
 	}
 	return -1;
 }
-#define ejson_error ejson_error_fn
+#define ejson_error(x_, ...)      ejson_error_fn(x_, NULL, __VA_ARGS__)
+#define ejson_location_error(...) ejson_error_fn(__VA_ARGS__)
+
 #endif
 
 #ifndef ejson_error_null
 #define ejson_error_null(...) (ejson_error(__VA_ARGS__), NULL)
+#endif
+
+#ifndef ejson_location_error_null
+#define ejson_location_error_null(...) (ejson_location_error(__VA_ARGS__), NULL)
 #endif
 
 struct ast_node;
@@ -48,7 +54,7 @@ struct ast_cls {
 	static const struct ast_cls name_ = { #name_, to_jnode_fn_, debug_print_fn_ }
 
 struct ast_node {
-	const struct ast_cls *cls;
+	const struct ast_cls  *cls;
 
 	union {
 		long long                   i; /* AST_CLS_LITERAL_INT, AST_CLS_LITERAL_BOOL */
@@ -157,7 +163,8 @@ struct tok_def {
 };
 
 struct token {
-	const struct tok_def *cls;
+	const struct tok_def  *cls;
+	struct token_pos_info  posinfo;
 	union {
 		struct {
 			size_t len;
@@ -308,7 +315,9 @@ TOK_DECL(TOK_COLON,      -1, 0, NULL); /* : */
 TOK_DECL(TOK_SEMI,       -1, 0, NULL); /* ; */
 
 struct tokeniser {
-	unsigned      lp; /* line position, character position */
+	uint_fast32_t line_nb;
+	const char   *p_line_start;
+
 	const char   *buf;
 
 	struct token  *p_current;
@@ -347,12 +356,16 @@ const struct token *tok_read(struct tokeniser *p_tokeniser) {
 	c          = *(p_tokeniser->buf++);
 	in_comment = (c == '#');
 	while (c == ' ' || c == '\t' || c == '\r' || c == '\n' || in_comment) {
-		char nc = *(p_tokeniser->buf++);
+		char nc;
+		nc = *(p_tokeniser->buf++);
 		if (c == '\r' || c == '\n') {
 			in_comment = 0;
-			p_tokeniser->lp++;
-			if (c == '\r' && nc == '\n') /* windows style */
-				nc = *(p_tokeniser->buf++);
+			p_tokeniser->p_line_start = p_tokeniser->buf - 1;
+			p_tokeniser->line_nb++;
+			if (c == '\r' && nc == '\n') { /* windows style */
+				nc                        = *(p_tokeniser->buf++);
+				p_tokeniser->p_line_start = p_tokeniser->buf - 1;
+			}
 		}
 		if (nc == '#') {
 			in_comment = 1;
@@ -362,6 +375,7 @@ const struct token *tok_read(struct tokeniser *p_tokeniser) {
 
 	/* nothing left */
 	if (c == '\0') {
+		p_tokeniser->buf--;
 		p_temp = p_tokeniser->p_next;
 		p_tokeniser->p_next = NULL;
 		return p_temp;
@@ -369,7 +383,10 @@ const struct token *tok_read(struct tokeniser *p_tokeniser) {
 
 	assert(c != '#');
 
-	p_temp = p_tokeniser->p_current;
+	p_temp                   = p_tokeniser->p_current;
+	p_temp->posinfo.p_line   = p_tokeniser->p_line_start;
+	p_temp->posinfo.char_pos = p_tokeniser->buf - p_tokeniser->p_line_start;
+	p_temp->posinfo.line_nb  = p_tokeniser->line_nb;
 
 	/* quoted string */
 	if (c == '\"') {
@@ -530,10 +547,11 @@ const struct token *tok_read(struct tokeniser *p_tokeniser) {
 }
 
 static int tokeniser_start(struct tokeniser *p_tokeniser, char *buf) {
-	p_tokeniser->buf = buf;
-	p_tokeniser->lp = 1;
-	p_tokeniser->p_current = &(p_tokeniser->curx);
-	p_tokeniser->p_next = &(p_tokeniser->nextx);
+	p_tokeniser->line_nb      = 1;
+	p_tokeniser->p_line_start = buf;
+	p_tokeniser->buf          = buf;
+	p_tokeniser->p_current    = &(p_tokeniser->curx);
+	p_tokeniser->p_next       = &(p_tokeniser->nextx);
 	return (tok_read(p_tokeniser) == NULL) ? 1 : 0;
 }
 
@@ -579,21 +597,18 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 			return ejson_error_null(p_error_handler, "failed to read another token because\n");
 
 		if (p_token->cls != &TOK_RPAREN)
-			return ejson_error_null(p_error_handler, "expected close parenthesis\n");
+			return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "expected close parenthesis\n");
 
 		return p_subexpr;
 	}
 
 	if (p_token->cls == &TOK_IDENTIFIER) {
-		const struct istring *k;
+		const struct istring   *k;
 		const struct ast_node **node;
-
 		if ((k = istrings_add(&(p_workspace->strings), p_token->t.strident.str)) == NULL)
 			return ejson_error_null(p_error_handler, "out of memory\n");
-
 		if ((node = (const struct ast_node **)pdict_get(&(p_workspace->workspace), (uintptr_t)(k->cstr))) == NULL)
-			return ejson_error_null(p_error_handler, "'%s' was not found in the workspace\n", k->cstr);
-
+			return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "'%s' was not found in the workspace\n", k->cstr);
 		return *node;
 	}
 
@@ -749,7 +764,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 			return ejson_error_null(p_error_handler, "failed to get another token because\n");
 
 		if (p_token->cls != &TOK_LPAREN)
-			return ejson_error_null(p_error_handler, "an open parenthesis was expected\n");
+			return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "an open parenthesis was expected\n");
 
 		if ((p_token = tok_read(p_tokeniser)) == NULL)
 			return ejson_error_null(p_error_handler, "failed to get another token after ( because\n");
@@ -759,7 +774,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 				const struct istring *k;
 				void **node;
 				if (p_token->cls != &TOK_IDENTIFIER)
-					return ejson_error_null(p_error_handler, "expected a parameter name literal but got a %s token\n", p_token->cls->name);
+					return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "expected a parameter name literal but got a %s token\n", p_token->cls->name);
 				if ((k = istrings_add(&(p_workspace->strings), p_token->t.strident.str)) == NULL)
 					return ejson_error_null(p_error_handler, "out of memory\n");
 				if ((p_token = tok_read(p_tokeniser)) == NULL) {
@@ -767,8 +782,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 					return NULL;
 				}
 				if (p_token->cls != &TOK_COMMA && p_token->cls != &TOK_RPAREN)
-					return ejson_error_null(p_error_handler, "a comma or close parenthesis was expected\n");
-				
+					return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "a comma or close parenthesis was expected\n");
 				argnames[nb_args] = (uintptr_t)(k->cstr);
 				node = pdict_get(&(p_workspace->workspace), argnames[nb_args]);
 				if (node != NULL) {
@@ -1396,9 +1410,12 @@ enumerate_dict_keys2
 	,struct linear_allocator          *p_alloc
 	,void                             *p_userctx
 	) {
-	unsigned i;
-	struct jnode tmp;
+	unsigned               i;
+	struct jnode           tmp;
 	const struct ast_node *p_eval;
+	size_t                 save;
+	int                    ret;
+
 	for (i = 0; i < DICTNODE_NUM; i++) {
 		if (p_node->p_children[i] != NULL) {
 			int r;
@@ -1408,13 +1425,22 @@ enumerate_dict_keys2
 		}
 	}
 
+	/* This is very important. The lifetime of the objects provided in the
+	 * enumeration is only for the life of the callback. The lifetime of the
+	 * string, however, persists. */
+	save = linear_allocator_save(p_alloc);
+
 	if ((p_eval = evaluate_ast(p_node->data2, pp_stack, stack_size, p_alloc, p_error_handler)) == NULL)
 		return ejson_error(p_error_handler, "could not get dictionary value\n");
 
 	if (to_jnode(&tmp, p_eval, p_alloc, p_error_handler))
 		return ejson_error(p_error_handler, "could not convert dictionary data\n");
 
-	return p_fn(&tmp, (const char *)(p_node + 1), p_userctx);
+	ret = p_fn(&tmp, (const char *)(p_node + 1), p_userctx);
+
+	linear_allocator_restore(p_alloc, save);
+
+	return ret;
 }
 
 static int enumerate_dict_keys(jdict_enumerate_fn *p_fn, void *p_ctx, struct linear_allocator *p_alloc, void *p_userctx) {
@@ -1535,9 +1561,20 @@ static int unexpected_fail(const char *p_fmt, ...) {
 	return -1;
 }
 
-static void on_parser_error(void *p_context, const char *p_format, va_list args) {
-	fprintf(stderr, "  ");
-	vfprintf(stderr, p_format, args);
+static void on_parser_error(void *p_context, const struct token_pos_info *p_location, const char *p_format, va_list args) {
+	if (p_location != NULL) {
+		const char *p_line = p_location->p_line;
+		fprintf(stderr, "  on line %d character %d: ", p_location->line_nb, p_location->char_pos);
+		vfprintf(stderr, p_format, args);
+		printf("    '");
+		while (*p_line != '\0' && *p_line != '\n' && *p_line != '\r')
+			printf("%c", *p_line++);
+		printf("'\n");
+		printf("    %*s^\n", p_location->char_pos, "");
+	} else {
+		fprintf(stderr, "  ");
+		vfprintf(stderr, p_format, args);
+	}
 }
 
 int run_test(const char *p_ejson, const char *p_ref, const char *p_name) {
@@ -1896,6 +1933,11 @@ int main(int argc, char *argv[]) {
 		,"failure to parse rhs due to identifier not existing"
 		);
 	run_test
+		("(1,"
+		,NULL
+		,"failure because expect )"
+		);
+	run_test
 		("["
 		,NULL
 		,"failure because need more tokens"
@@ -1936,11 +1978,26 @@ int main(int argc, char *argv[]) {
 		,"func cannot parse function body"
 		);
 
+#if 0
+	/* This is more an experiment than a test. */
+	run_test
+		("define names = [\"c\", \"c#\", \"d\", \"d#\", \"e\", \"f\", \"f#\", \"g\", \"g#\", \"a\", \"a#\", \"b\"];"
+		 "define filename_gen = func(p, y) format[\"%s/%03d-%s.wav\", p, y, listval names y % 12];"
+		 "map "
+		 "  func(x) "
+		 "    {\"attack-samples\": [call filename_gen [\"Bourdon 8/A0\", x]]"
+		 "    }"
+		 "  range[36,96]"
+		,"0"
+		,"func cannot parse function body"
+		);
+#endif
 
 	/* FIXME: something is broken i think with the test comparison function. */
 	run_test
-		("define notes=[\"a\",\"b\",\"c\"];"
-		 "map func(x) {\"name\": listval notes x % 3, \"id\": x} range[0,5]"
+		("define notes=[\"a\",\"b\",\"c\"];\n"
+		 "map func(x)\n"
+		 "  {\"name\": listval notes x % 3, \"id\": x} range[0,5]\n"
 		,"[{\"id\":0,\"name\":\"a\"}"
 		 ",{\"id\":1,\"name\":\"b\"}"
 		 ",{\"id\":2,\"name\":\"c\"}"
