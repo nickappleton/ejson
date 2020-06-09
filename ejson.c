@@ -16,6 +16,7 @@
 #ifndef ejson_error
 #ifdef EJSON_NO_ERROR_MESSAGES
 #define ejson_error(p_handler_, p_format, ...) (-1)
+#define ejson_location_error(p_handler_, p_location, p_format, ...) (-1)
 #endif
 #endif
 
@@ -31,7 +32,6 @@ static int ejson_error_fn(const struct ejson_error_handler *p_handler, const str
 }
 #define ejson_error(x_, ...)      ejson_error_fn(x_, NULL, __VA_ARGS__)
 #define ejson_location_error(...) ejson_error_fn(__VA_ARGS__)
-
 #endif
 
 #ifndef ejson_error_null
