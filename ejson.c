@@ -1707,6 +1707,8 @@ int main(int argc, char *argv[]) {
 		,"[1,-2,3.4,-4.5,5.6e2,-7.8e-2]"
 		,"numeric objects in a list"
 		);
+
+	/* range tests */
 	run_test
 		("range[5]"
 		,"[0, 1, 2, 3, 4]"
@@ -1732,6 +1734,8 @@ int main(int argc, char *argv[]) {
 		,"[6,3,0,-3,-6,-9]"
 		,"range generator from-step-to 2"
 		);
+	
+	/* function tests */
 	run_test
 		("call func() 1 []"
 		,"1"
@@ -1772,26 +1776,6 @@ int main(int argc, char *argv[]) {
 		 "argument"
 		);
 	run_test
-		("define x = 11; define y = 7; x * y"
-		,"77"
-		,"use a workspace variable"
-		);
-	run_test
-		("define x = func(z) z*z; define y = 7; call x [y]"
-		,"49"
-		,"use a workspace variable as a function"
-		);
-	run_test
-		("listval [1,2,3] 1"
-		,"2"
-		,"extraction of a value from a literal list"
-		);
-	run_test
-		("listval range[10] 4"
-		,"4"
-		,"extracting an element of a generated list"
-		);
-	run_test
 		("call func(x) [1, x, 2, 3] [50]"
 		,"[1, 50, 2, 3]"
 		,"a function that returns a 4 element list with the second element "
@@ -1809,11 +1793,37 @@ int main(int argc, char *argv[]) {
 		,"calling a function where the arguments are the list produced by "
 		 "calling range"
 		);
+
+	/* define tests */
+	run_test
+		("define x = 11; define y = 7; x * y"
+		,"77"
+		,"use a workspace variable"
+		);
+	run_test
+		("define x = func(z) z*z; define y = 7; call x [y]"
+		,"49"
+		,"use a workspace variable as a function"
+		);
+
+	/* listval tests */
+	run_test
+		("listval [1,2,3] 1"
+		,"2"
+		,"extraction of a value from a literal list"
+		);
+	run_test
+		("listval range[10] 4"
+		,"4"
+		,"extracting an element of a generated list"
+		);
 	run_test
 		("listval call func(x) [1, x, 2, 3] [50] 1"
 		,"50"
 		,"extracting an element of the list returned by a function"
 		);
+
+	/* map tests */
 	run_test
 		("map func(x) [1, x, x*x] [1,2,3]"
 		,"[[1,1,1],[1,2,4],[1,3,9]]"
@@ -1834,6 +1844,8 @@ int main(int argc, char *argv[]) {
 		,"[1,3,5,7,9]"
 		,"call range with arguments given by the result of a function call"
 		);
+
+	/* format tests */
 	run_test
 		("format[\"hello\"]"
 		,"\"hello\""
