@@ -647,26 +647,20 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		uint_fast32_t    nb_kvs = 0;
 		const struct token *p_next;
 		if ((p_next = tok_peek(p_tokeniser)) == NULL) {
-			fprintf(stderr, "expected another token\n");
-			return NULL;
+			struct token_pos_info tpi;
+			tok_get_nearest_location(p_tokeniser, &tpi);
+			return ejson_location_error_null(p_error_handler, &tpi, "a dict expression must be terminated\n");
 		}
 		if (p_next->cls != &TOK_RBRACE) {
 			do {
-				p_temp_nodes[2*nb_kvs+0] = expect_expression(p_workspace, p_tokeniser, p_error_handler);
-				if (p_temp_nodes[2*nb_kvs+0] == NULL) {
-					fprintf(stderr, "expected expression\n");
+				if ((p_temp_nodes[2*nb_kvs+0] = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 					return NULL;
-				}
 				if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
 					return NULL;
 				if (p_token->cls != &TOK_COLON)
 					return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "expected a :\n");
-
-				p_temp_nodes[2*nb_kvs+1] = expect_expression(p_workspace, p_tokeniser, p_error_handler);
-				if (p_temp_nodes[2*nb_kvs+1] == NULL) {
-					fprintf(stderr, "expected expression\n");
+				if ((p_temp_nodes[2*nb_kvs+1] = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 					return NULL;
-				}
 				nb_kvs++;
 				if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
 					return NULL;
@@ -674,9 +668,8 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 					return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "expected a , or }\n");
 			} while (p_token->cls != &TOK_RBRACE);
 		} else {
-			if (tok_read(p_tokeniser, p_error_handler) == NULL) { /* empty dict - skip over } */
-				return NULL;
-			}
+			p_token = tok_read(p_tokeniser, p_error_handler);
+			assert(p_token != NULL && "peeked a valid token but could not skip over it");
 		}
 		p_ret->cls             = &AST_CLS_LITERAL_DICT;
 		p_ret->d.ldict.nb_keys = nb_kvs;
@@ -689,8 +682,11 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 	} else if (p_token->cls == &TOK_LSQBR) {
 		uint_fast32_t nb_list = 0;
 		const struct token *p_next;
-		if ((p_next = tok_peek(p_tokeniser)) == NULL)
-			return ejson_error_null(p_error_handler, "a list expression must be terminated\n");
+		if ((p_next = tok_peek(p_tokeniser)) == NULL) {
+			struct token_pos_info tpi;
+			tok_get_nearest_location(p_tokeniser, &tpi);
+			return ejson_location_error_null(p_error_handler, &tpi, "a list expression must be terminated\n");
+		}
 		if (p_next->cls != &TOK_RSQBR) {
 			do {
 				if ((p_temp_nodes[nb_list] = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
@@ -708,7 +704,8 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		p_ret->cls        = &AST_CLS_LITERAL_LIST;
 		p_ret->d.llist.nb_elements = nb_list;
 		if (nb_list) {
-			p_ret->d.llist.elements = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node *) * nb_list);
+			if ((p_ret->d.llist.elements = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node *) * nb_list)) == NULL)
+				return ejson_error_null(p_error_handler, "out of memory\n");
 			memcpy(p_ret->d.llist.elements, p_temp_nodes, sizeof(struct ast_node *) * nb_list);
 		} else {
 			p_ret->d.llist.elements = NULL;
@@ -716,8 +713,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 	} else if (p_token->cls == &TOK_SUB) {
 		const struct ast_node *p_next;
 		/* TODO: This sucks we can have unary unary unary unary unary.... don't want. */
-		p_next = expect_expression(p_workspace, p_tokeniser, p_error_handler);
-		if (p_next == NULL)
+		if ((p_next = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
 		p_ret->cls           = &AST_CLS_NEG;
 		p_ret->d.binop.p_lhs = p_next;
@@ -795,14 +791,11 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 				abort();
 			}
 		}
-
 	} else if (p_token->cls == &TOK_CALL) {
 		p_ret->cls        = &AST_CLS_CALL;
-		p_ret->d.call.fn  = expect_expression(p_workspace, p_tokeniser, p_error_handler);
-		if (p_ret->d.call.fn == NULL)
+		if ((p_ret->d.call.fn = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
-		p_ret->d.call.p_args  = expect_expression(p_workspace, p_tokeniser, p_error_handler);
-		if (p_ret->d.call.p_args == NULL)
+		if ((p_ret->d.call.p_args  = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
 	} else {
 		token_print(p_token);
@@ -1427,6 +1420,8 @@ static int enumerate_dict_keys(jdict_enumerate_fn *p_fn, void *p_ctx, struct lin
 }
 
 static int to_jnode(struct jnode *p_node, const struct ast_node *p_ast, struct linear_allocator *p_alloc, const struct ejson_error_handler *p_error_handler) {
+	struct execution_context *p_ec;
+
 	if (p_ast->cls == &AST_CLS_LITERAL_INT) {
 		p_node->cls        = JNODE_CLS_INTEGER;
 		p_node->d.int_bool = p_ast->d.i;
@@ -1456,25 +1451,24 @@ static int to_jnode(struct jnode *p_node, const struct ast_node *p_ast, struct l
 		return 0;
 	}
 
-	if (p_ast->cls == &AST_CLS_READY_DICT) {
-		struct execution_context *ec = linear_allocator_alloc(p_alloc, sizeof(struct execution_context));
-		ec->p_error_handler = p_error_handler;
-		ec->p_object        = p_ast;
+	if ((p_ec = linear_allocator_alloc(p_alloc, sizeof(struct execution_context))) == NULL)
+		return ejson_error(p_error_handler, "out of memory\n");
 
+	p_ec->p_error_handler       = p_error_handler;
+	p_ec->p_object              = p_ast;
+
+	if (p_ast->cls == &AST_CLS_READY_DICT) {
 		p_node->cls               = JNODE_CLS_DICT;
 		p_node->d.dict.nb_keys    = p_ast->d.rdict.nb_keys;
-		p_node->d.dict.ctx        = ec;
+		p_node->d.dict.ctx        = p_ec;
 		p_node->d.dict.get_by_key = NULL; /* TODO */
 		p_node->d.dict.enumerate  = enumerate_dict_keys;
 		return 0;
 	}
 
 	if (p_ast->cls == &AST_CLS_LIST_GENERATOR) {
-		struct execution_context *ec = linear_allocator_alloc(p_alloc, sizeof(struct execution_context));
-		ec->p_error_handler          = p_error_handler;
-		ec->p_object                 = p_ast;
 		p_node->cls                  = JNODE_CLS_LIST;
-		p_node->d.list.ctx           = ec;
+		p_node->d.list.ctx           = p_ec;
 		p_node->d.list.nb_elements   = p_ast->d.lgen.nb_elements;
 		p_node->d.list.get_elemenent = jnode_list_get_element;
 		return 0;
@@ -1491,28 +1485,32 @@ int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace,
 	while ((p_token = tok_peek(p_tokeniser)) != NULL && p_token->cls == &TOK_DEFINE) {
 		const struct istring *p_key;
 		void **pp_obj;
-		if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL) /* skip over define */
-			return ejson_error(p_error_handler, "no tokens to read\n");
-
-		if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL || p_token->cls != &TOK_IDENTIFIER)
-			return ejson_error(p_error_handler, "expected an identifier token after '@'\n");
+		p_token = tok_read(p_tokeniser, p_error_handler); assert(p_token != NULL);
+		if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
+			return 1;
+		if (p_token->cls != &TOK_IDENTIFIER)
+			return ejson_location_error(p_error_handler, &(p_token->posinfo), "expected an identifier\n");
 		if ((p_key = istrings_add(&(p_workspace->strings), p_token->t.strident.str)) == NULL)
 			return ejson_error(p_error_handler, "out of memory\n");
 		if ((pp_obj = pdict_get(&(p_workspace->workspace), (uintptr_t)(p_key->cstr))) != NULL)
 			return ejson_error(p_error_handler, "cannot redefine variable '%s'\n", p_token->t.strident.str);
-		if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL || p_token->cls != &TOK_EQ)
-			return ejson_error(p_error_handler, "expected '='\n");
+		if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
+			return 1;
+		if (p_token->cls != &TOK_EQ)
+			return ejson_location_error(p_error_handler, &(p_token->posinfo), "expected '='\n");
 		if ((p_obj = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return ejson_error(p_error_handler, "expected an expression\n");
-		if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL || p_token->cls != &TOK_SEMI)
-			return ejson_error(p_error_handler, "expected ';'\n");
+		if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
+			return 1;
+		if (p_token->cls != &TOK_SEMI)
+			return ejson_location_error(p_error_handler, &(p_token->posinfo), "expected ';'\n");
 		if (pdict_set(&(p_workspace->workspace), (uintptr_t)(p_key->cstr), (void *)p_obj))
 			return ejson_error(p_error_handler, "out of memory\n");
 	}
 	if ((p_obj = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
-		return ejson_error(p_error_handler, "failed to parse root document expression because\n");
+		return 1;
 	if ((p_token = tok_peek(p_tokeniser)) != NULL)
-		return ejson_error(p_error_handler, "expected no more tokens - got '%s'\n", p_token->cls->name);
+		return ejson_location_error(p_error_handler, &(p_token->posinfo), "expected no more tokens at end of document\n", p_token->cls->name);
 	if ((p_root = evaluate_ast(p_obj, NULL, 0, &(p_workspace->alloc), p_error_handler)) == NULL)
 		return ejson_error(p_error_handler, "failed to evaluate root document expression because\n");
 	if (to_jnode(p_node, p_root, &(p_workspace->alloc), p_error_handler))
@@ -1867,6 +1865,21 @@ int main(int argc, char *argv[]) {
 		,"test calling a function that is in a list of functions"
 		);
 
+	/* FIXME: something is broken i think with the test comparison function. */
+	run_test
+		("define notes=[\"a\",\"b\",\"c\"];\n"
+		 "map func(x)\n"
+		 "  {\"name\": listval notes x % 3, \"id\": x} range[0,5]\n"
+		,"[{\"id\":0,\"name\":\"a\"}"
+		 ",{\"id\":1,\"name\":\"b\"}"
+		 ",{\"id\":2,\"name\":\"c\"}"
+		 ",{\"id\":3,\"name\":\"a\"}"
+		 ",{\"id\":4,\"name\":\"b\"}"
+		 ",{\"id\":2,\"name\":\"c\"}"
+		 "]"
+		,"use map to generate a list of dicts"
+		);
+
 	/* Expected fail tests */
 	run_test
 		("1+\"a\""
@@ -1923,6 +1936,8 @@ int main(int argc, char *argv[]) {
 		,NULL
 		,"failure because need more tokens"
 		);
+	
+	/* func error tests */
 	run_test
 		("func"
 		,NULL
@@ -1963,6 +1978,8 @@ int main(int argc, char *argv[]) {
 		,NULL
 		,"func arguments must not alias workspace variables"
 		);
+	
+	/* listval error tests */
 	run_test
 		("listval"
 		,NULL
@@ -1983,6 +2000,8 @@ int main(int argc, char *argv[]) {
 		,NULL
 		,"listval could not parse second expression"
 		);
+
+	/* Map tests */
 	run_test
 		("map"
 		,NULL
@@ -2003,7 +2022,33 @@ int main(int argc, char *argv[]) {
 		,NULL
 		,"map could not parse second expression"
 		);
+	run_test
+		("1 1"
+		,NULL
+		,"expected no more tokens"
+		);
 
+	/* define error tests */
+	run_test
+		("define"
+		,NULL
+		,"out of tokens"
+		);
+	run_test
+		("define 1"
+		,NULL
+		,"define expects a literal argument"
+		);
+	run_test
+		("define hello FAIL"
+		,NULL
+		,"define expects an equals"
+		);
+	run_test
+		("define hello = 1 FAIL"
+		,NULL
+		,"define expects a semicolon"
+		);
 
 #if 0
 	/* This is more an experiment than a test. */
@@ -2019,21 +2064,6 @@ int main(int argc, char *argv[]) {
 		,"func cannot parse function body"
 		);
 #endif
-
-	/* FIXME: something is broken i think with the test comparison function. */
-	run_test
-		("define notes=[\"a\",\"b\",\"c\"];\n"
-		 "map func(x)\n"
-		 "  {\"name\": listval notes x % 3, \"id\": x} range[0,5]\n"
-		,"[{\"id\":0,\"name\":\"a\"}"
-		 ",{\"id\":1,\"name\":\"b\"}"
-		 ",{\"id\":2,\"name\":\"c\"}"
-		 ",{\"id\":3,\"name\":\"a\"}"
-		 ",{\"id\":4,\"name\":\"b\"}"
-		 ",{\"id\":2,\"name\":\"c\"}"
-		 "]"
-		,"use map to generate a list of dicts"
-		);
 
 	//run_test("{}", "{}", "empty dict");
 
