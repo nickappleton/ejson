@@ -351,7 +351,7 @@ void tok_get_nearest_location(const struct tokeniser *p_tokeniser, struct token_
 	*p_tpi = (p_tokeniser->p_next != NULL) ? p_tokeniser->p_next->posinfo : p_tokeniser->p_current->posinfo;
 }
 
-const struct token *tok_read(struct tokeniser *p_tokeniser) {
+const struct token *tok_read(struct tokeniser *p_tokeniser, const struct ejson_error_handler *p_error_handler) {
 	struct token *p_temp;
 	char c;
 	int in_comment;
@@ -385,7 +385,7 @@ const struct token *tok_read(struct tokeniser *p_tokeniser) {
 			p_tokeniser->p_next = NULL;
 			return p_tokeniser->p_current;
 		}
-		return p_tokeniser->p_next;
+		return ejson_location_error_null(p_error_handler, &(p_tokeniser->p_current->posinfo), "expected another token\n");
 	}
 
 	assert(c != '#');
@@ -401,10 +401,10 @@ const struct token *tok_read(struct tokeniser *p_tokeniser) {
 		p_temp->t.strident.len = 0;
 		while ((c = *(p_tokeniser->buf++)) != '\"') {
 			if (c == '\0')
-				return NULL; /* EOF */
+				return ejson_location_error_null(p_error_handler, &(p_temp->posinfo), "unterminated string\n");
 
 			if (c == '\n' || c == '\r')
-				return NULL; /* EOL */
+				return ejson_location_error_null(p_error_handler, &(p_temp->posinfo), "newline encountered in string\n");
 
 			if (c == '\\') {
 				c = *(p_tokeniser->buf++);
@@ -431,11 +431,11 @@ const struct token *tok_read(struct tokeniser *p_tokeniser) {
 					    ||  expect_hex_digit_accumulate(&(p_tokeniser->buf), &h)
 					    ||  expect_hex_digit_accumulate(&(p_tokeniser->buf), &h)
 					    )
-						return NULL;
+						return ejson_location_error_null(p_error_handler, &(p_temp->posinfo), "invalid json codepoint escape sequence\n");
 					/* Convert to UTF-8 now. */
-					abort();
+					return ejson_location_error_null(p_error_handler, &(p_temp->posinfo), "do not support json codepoint escape sequences\n");
 				} else
-					return NULL; /* invalid escape */
+					return ejson_location_error_null(p_error_handler, &(p_temp->posinfo), "invalid json codepoint escape sequence\n");
 			}
 
 			p_temp->t.strident.str[p_temp->t.strident.len++] = c;
@@ -458,7 +458,7 @@ const struct token *tok_read(struct tokeniser *p_tokeniser) {
 			p_temp->t.tflt = ull;
 			c = *(p_tokeniser->buf++);
 			if (c < '0' || c > '9')
-				return NULL; /* 13413. is not a valid literal */
+				return ejson_location_error_null(p_error_handler, &(p_temp->posinfo), "invalid json numeric\n");
 			while (c >= '0' && c <= '9') {
 				p_temp->t.tflt += (c - '0') * frac;
 				frac *= 0.1;
@@ -476,7 +476,7 @@ const struct token *tok_read(struct tokeniser *p_tokeniser) {
 				c = *(p_tokeniser->buf++);
 			}
 			if (c < '0' || c > '9')
-				return NULL;
+				return ejson_location_error_null(p_error_handler, &(p_temp->posinfo), "invalid json numeric\n");
 			eval = c - '0';
 			c = *(p_tokeniser->buf++);
 			while (c >= '0' && c <= '9') {
@@ -542,8 +542,7 @@ const struct token *tok_read(struct tokeniser *p_tokeniser) {
 	} else if (c == '-') { p_temp->cls = &TOK_SUB;
 	} else if (c == '+') { p_temp->cls = &TOK_ADD;
 	} else {
-		printf("TOKENISATION ERROR %c\n", c);
-		return NULL;
+		return ejson_location_error_null(p_error_handler, &(p_temp->posinfo), "invalid token\n");
 	}
 
 	p_temp                 = p_tokeniser->p_next;
@@ -559,7 +558,7 @@ static int tokeniser_start(struct tokeniser *p_tokeniser, char *buf) {
 	p_tokeniser->buf          = buf;
 	p_tokeniser->p_current    = &(p_tokeniser->curx);
 	p_tokeniser->p_next       = &(p_tokeniser->nextx);
-	return (tok_read(p_tokeniser) == NULL) ? 1 : 0;
+	return (tok_read(p_tokeniser, NULL) == NULL) ? 1 : 0;
 }
 
 struct evaluation_context {
@@ -590,28 +589,18 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 	const struct ast_node *p_temp_nodes[8192];
 	struct ast_node *p_ret = NULL;
 	const struct token *p_token;
-	struct token_pos_info tpi;
 
-	if ((p_token = tok_read(p_tokeniser)) == NULL) {
-		tok_get_nearest_location(p_tokeniser, &tpi);
-		return ejson_location_error_null(p_error_handler, &tpi, "failed to read another token near location because\n");
-	}
-
-	tpi = p_token->posinfo;
+	if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
+		return NULL;
 
 	if (p_token->cls == &TOK_LPAREN) {
 		const struct ast_node *p_subexpr;
-
 		if ((p_subexpr = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
-			return ejson_location_error_null(p_error_handler, &tpi, "failed to parse expression near the location because\n");
-
-		tok_get_nearest_location(p_tokeniser, &tpi);
-		if ((p_token = tok_read(p_tokeniser)) == NULL)
-			return ejson_location_error_null(p_error_handler, &tpi, "failed to read a close parenthesis token near location because\n");
-
+			return NULL;
+		if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
+			return NULL;
 		if (p_token->cls != &TOK_RPAREN)
 			return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "expected close parenthesis\n");
-
 		return p_subexpr;
 	}
 
@@ -621,7 +610,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		if ((k = istrings_add(&(p_workspace->strings), p_token->t.strident.str)) == NULL)
 			return ejson_error_null(p_error_handler, "out of memory\n");
 		if ((node = (const struct ast_node **)pdict_get(&(p_workspace->workspace), (uintptr_t)(k->cstr))) == NULL)
-			return ejson_location_error_null(p_error_handler, &tpi, "'%s' was not found in the workspace\n", k->cstr);
+			return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "'%s' was not found in the workspace\n", k->cstr);
 		return *node;
 	}
 
@@ -629,22 +618,18 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
 			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->cls        = &AST_CLS_LISTVAL;
-		tok_get_nearest_location(p_tokeniser, &tpi);
 		if ((p_ret->d.listval.p_list = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
-			return ejson_location_error_null(p_error_handler, &tpi, "could not parse the listval list expression near the location because\n");
-		tok_get_nearest_location(p_tokeniser, &tpi);
+			return NULL;
 		if ((p_ret->d.listval.p_index = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
-			return ejson_location_error_null(p_error_handler, &tpi, "could not parse the listval index expression near the location because\n");
+			return NULL;
 	} else if (p_token->cls == &TOK_MAP) {
 		if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
 			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->cls        = &AST_CLS_MAP;
-		tok_get_nearest_location(p_tokeniser, &tpi);
 		if ((p_ret->d.map.p_function = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
-			return ejson_location_error_null(p_error_handler, &tpi, "could not parse the map function expression near the location because\n");
-		tok_get_nearest_location(p_tokeniser, &tpi);
+			return NULL;
 		if ((p_ret->d.map.p_input_list = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
-			return ejson_location_error_null(p_error_handler, &tpi, "could not parse the map data expression near the location because\n");
+			return NULL;
 	} else if (p_token->cls == &TOK_INT) {
 		if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
 			return ejson_error_null(p_error_handler, "out of memory\n");
@@ -679,25 +664,24 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 					fprintf(stderr, "expected expression\n");
 					return NULL;
 				}
-				if ((p_token = tok_read(p_tokeniser)) == NULL || p_token->cls != &TOK_COLON) {
-					fprintf(stderr, "expected :\n");
+				if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
 					return NULL;
-				}
+				if (p_token->cls != &TOK_COLON)
+					return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "expected a :\n");
+
 				p_temp_nodes[2*nb_kvs+1] = expect_expression(p_workspace, p_tokeniser, p_error_handler);
 				if (p_temp_nodes[2*nb_kvs+1] == NULL) {
 					fprintf(stderr, "expected expression\n");
 					return NULL;
 				}
 				nb_kvs++;
-				if ((p_token = tok_read(p_tokeniser)) == NULL || (p_token->cls != &TOK_RBRACE && p_token->cls != &TOK_COMMA)) {
-					fprintf(stderr, "expected , or }\n");
+				if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
 					return NULL;
-				}
-				if (p_token->cls == &TOK_RBRACE)
-					break;
-			} while (1);
+				if (p_token->cls != &TOK_RBRACE && p_token->cls != &TOK_COMMA)
+					return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "expected a , or }\n");
+			} while (p_token->cls != &TOK_RBRACE);
 		} else {
-			if (tok_read(p_tokeniser) == NULL) { /* empty dict - skip over } */
+			if (tok_read(p_tokeniser, p_error_handler) == NULL) { /* empty dict - skip over } */
 				return NULL;
 			}
 		}
@@ -717,20 +701,16 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 			return ejson_error_null(p_error_handler, "a list expression must be terminated\n");
 		if (p_next->cls != &TOK_RSQBR) {
 			do {
-				p_temp_nodes[nb_list] = expect_expression(p_workspace, p_tokeniser, p_error_handler);
-				if (p_temp_nodes[nb_list] == NULL)
-					return ejson_error_null(p_error_handler, "failed to evaluate the expression for list element %d because\n", nb_list);
+				if ((p_temp_nodes[nb_list] = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
+					return NULL;
 				nb_list++;
-				tok_get_nearest_location(p_tokeniser, &tpi);
-				if ((p_token = tok_read(p_tokeniser)) == NULL)
-					return ejson_location_error_null(p_error_handler, &tpi, "failed to get a , or ] token near location because\n");
+				if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
+					return NULL;
 				if (p_token->cls != &TOK_RSQBR && p_token->cls != &TOK_COMMA)
-					return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "the token was neither , nor ]\n");
-				if (p_token->cls == &TOK_RSQBR)
-					break;
-			} while (1);
+					return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "expected either a , or ]\n");
+			} while (p_token->cls != &TOK_RSQBR);
 		} else {
-			p_token = tok_read(p_tokeniser);
+			p_token = tok_read(p_tokeniser, p_error_handler);
 			assert(p_token != NULL && "peeked a valid token but could not skip over it");
 		}
 		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
@@ -784,17 +764,12 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		unsigned        i;
 		struct ast_node args[32];
 		uintptr_t       argnames[32];
-
-		tpi = p_token->posinfo;
-		if ((p_token = tok_read(p_tokeniser)) == NULL)
-			return ejson_location_error_null(p_error_handler, &tpi, "failed to get another token near location because\n");
-
+		if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
+			return NULL;
 		if (p_token->cls != &TOK_LPAREN)
-			return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "an open parenthesis was expected\n");
-
-		tpi = p_token->posinfo;
-		if ((p_token = tok_read(p_tokeniser)) == NULL)
-			return ejson_location_error_null(p_error_handler, &tpi, "failed to get another token near location because\n");
+			return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "expected an open parenthesis\n");
+		if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
+			return NULL;
 
 		if (p_token->cls != &TOK_RPAREN) {
 			do {
@@ -806,11 +781,10 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 					return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "expected a parameter name literal but got a %s token\n", p_token->cls->name);
 				if ((k = istrings_add(&(p_workspace->strings), p_token->t.strident.str)) == NULL)
 					return ejson_error_null(p_error_handler, "out of memory\n");
-				tpi = p_token->posinfo;
-				if ((p_token = tok_read(p_tokeniser)) == NULL)
-					return ejson_location_error_null(p_error_handler, &tpi, "failed to get another token near location because\n");
+				if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
+					return NULL;
 				if (p_token->cls != &TOK_COMMA && p_token->cls != &TOK_RPAREN)
-					return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "a comma or close parenthesis was expected\n");
+					return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "expected a comma or close parenthesis\n");
 				argnames[nb_args] = (uintptr_t)(k->cstr);
 				node = pdict_get(&(p_workspace->workspace), argnames[nb_args]);
 				if (node != NULL)
@@ -820,14 +794,10 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 				if (pdict_set(&(p_workspace->workspace), argnames[nb_args], &(args[nb_args])))
 					return ejson_error_null(p_error_handler, "out of memory\n");
 				nb_args++;
-
 				if (p_token->cls == &TOK_RPAREN)
 					break;
-
-				if ((p_token = tok_read(p_tokeniser)) == NULL) {
-					fprintf(stderr, "expected another token after ,\n");
+				if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
 					return NULL;
-				}
 			} while (1);
 		}
 
@@ -837,7 +807,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		p_ret->cls          = &AST_CLS_FUNCTION;
 		p_ret->d.fn.nb_args = nb_args;
 		if ((p_ret->d.fn.node = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
-			return ejson_error_null(p_error_handler, "failed to parse the function expression for func because\n");
+			return NULL;
 
 		p_workspace->stack_depth -= nb_args;
 
@@ -853,10 +823,10 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		p_ret->cls        = &AST_CLS_CALL;
 		p_ret->d.call.fn  = expect_expression(p_workspace, p_tokeniser, p_error_handler);
 		if (p_ret->d.call.fn == NULL)
-			return ejson_error_null(p_error_handler, "failed to parse function expression for call because\n");
+			return NULL;
 		p_ret->d.call.p_args  = expect_expression(p_workspace, p_tokeniser, p_error_handler);
 		if (p_ret->d.call.p_args == NULL)
-			return ejson_error_null(p_error_handler, "failed to parse argument expression for call because\n");
+			return NULL;
 	} else {
 		token_print(p_token);
 		abort();
@@ -879,11 +849,11 @@ const struct ast_node *expect_expression_1(const struct ast_node *p_lhs, struct 
 		const struct tok_def *p_op = p_token->cls;
 		struct token_pos_info loc_info = p_token->posinfo;
 
-		p_token = tok_read(p_tokeniser); /* Skip over the operator */
+		p_token = tok_read(p_tokeniser, p_error_handler); /* Skip over the operator */
 		assert(p_token != NULL);
 
 		if ((p_rhs = parse_primary(p_workspace, p_tokeniser, p_error_handler)) == NULL)
-			return ejson_location_error_null(p_error_handler, &loc_info, "failed to parse primary near the location because\n");
+			return NULL;
 	
 		while
 		    (   (p_token = tok_peek(p_tokeniser)) != NULL
@@ -934,6 +904,7 @@ struct list_element_fn_data {
 	unsigned                 stack_size;
 	unsigned                 nb_elements;
 	struct ast_node        **pp_elements;
+
 };
 
 struct execution_context {
@@ -948,6 +919,7 @@ struct lrange {
 	long long first;
 	long long step_size;
 	long long numel;
+
 };
 
 const struct ast_node *ast_list_generator_get_element(const struct ast_node *p_list, unsigned element, struct linear_allocator *p_alloc, const struct ejson_error_handler *p_error_handler) {
@@ -1542,27 +1514,27 @@ int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace,
 	while ((p_token = tok_peek(p_tokeniser)) != NULL && p_token->cls == &TOK_DEFINE) {
 		const struct istring *p_key;
 		void **pp_obj;
-		if ((p_token = tok_read(p_tokeniser)) == NULL) /* skip over define */
+		if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL) /* skip over define */
 			return ejson_error(p_error_handler, "no tokens to read\n");
 
-		if ((p_token = tok_read(p_tokeniser)) == NULL || p_token->cls != &TOK_IDENTIFIER)
+		if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL || p_token->cls != &TOK_IDENTIFIER)
 			return ejson_error(p_error_handler, "expected an identifier token after '@'\n");
 		if ((p_key = istrings_add(&(p_workspace->strings), p_token->t.strident.str)) == NULL)
 			return ejson_error(p_error_handler, "out of memory\n");
 		if ((pp_obj = pdict_get(&(p_workspace->workspace), (uintptr_t)(p_key->cstr))) != NULL)
 			return ejson_error(p_error_handler, "cannot redefine variable '%s'\n", p_token->t.strident.str);
-		if ((p_token = tok_read(p_tokeniser)) == NULL || p_token->cls != &TOK_EQ)
+		if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL || p_token->cls != &TOK_EQ)
 			return ejson_error(p_error_handler, "expected '='\n");
 		if ((p_obj = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return ejson_error(p_error_handler, "expected an expression\n");
-		if ((p_token = tok_read(p_tokeniser)) == NULL || p_token->cls != &TOK_SEMI)
+		if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL || p_token->cls != &TOK_SEMI)
 			return ejson_error(p_error_handler, "expected ';'\n");
 		if (pdict_set(&(p_workspace->workspace), (uintptr_t)(p_key->cstr), (void *)p_obj))
 			return ejson_error(p_error_handler, "out of memory\n");
 	}
 	if ((p_obj = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 		return ejson_error(p_error_handler, "failed to parse root document expression because\n");
-	if ((p_token = tok_read(p_tokeniser)) != NULL)
+	if ((p_token = tok_peek(p_tokeniser)) != NULL)
 		return ejson_error(p_error_handler, "expected no more tokens - got '%s'\n", p_token->cls->name);
 	if ((p_root = evaluate_ast(p_obj, NULL, 0, &(p_workspace->alloc), p_error_handler)) == NULL)
 		return ejson_error(p_error_handler, "failed to evaluate root document expression because\n");
