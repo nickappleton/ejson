@@ -613,37 +613,30 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 			return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "'%s' was not found in the workspace\n", k->cstr);
 		return *node;
 	}
+	if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
+		return ejson_error_null(p_error_handler, "out of memory\n");
 
 	if (p_token->cls == &TOK_LISTVAL) {
-		if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
-			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->cls        = &AST_CLS_LISTVAL;
 		if ((p_ret->d.listval.p_list = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
 		if ((p_ret->d.listval.p_index = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
 	} else if (p_token->cls == &TOK_MAP) {
-		if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
-			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->cls        = &AST_CLS_MAP;
 		if ((p_ret->d.map.p_function = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
 		if ((p_ret->d.map.p_input_list = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
 	} else if (p_token->cls == &TOK_INT) {
-		if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
-			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->cls        = &AST_CLS_LITERAL_INT;
 		p_ret->d.i        = p_token->t.tint;
 	} else if (p_token->cls == &TOK_FLOAT) {
-		if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
-			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->cls        = &AST_CLS_LITERAL_FLOAT;
 		p_ret->d.f        = p_token->t.tflt;
 	} else if (p_token->cls == &TOK_STRING) {
 		size_t sl = strlen(p_token->t.strident.str);
 		char *p_strbuf;
-		p_ret               = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_strbuf            = linear_allocator_alloc(&(p_workspace->alloc), sl + 1);
 		memcpy(p_strbuf, p_token->t.strident.str, sl + 1);
 		p_ret->cls          = &AST_CLS_LITERAL_STRING;
@@ -685,7 +678,6 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 				return NULL;
 			}
 		}
-		p_ret                  = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls             = &AST_CLS_LITERAL_DICT;
 		p_ret->d.ldict.nb_keys = nb_kvs;
 		if (nb_kvs) {
@@ -713,7 +705,6 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 			p_token = tok_read(p_tokeniser, p_error_handler);
 			assert(p_token != NULL && "peeked a valid token but could not skip over it");
 		}
-		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls        = &AST_CLS_LITERAL_LIST;
 		p_ret->d.llist.nb_elements = nb_list;
 		if (nb_list) {
@@ -728,34 +719,22 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		p_next = expect_expression(p_workspace, p_tokeniser, p_error_handler);
 		if (p_next == NULL)
 			return NULL;
-		if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
-			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->cls           = &AST_CLS_NEG;
 		p_ret->d.binop.p_lhs = p_next;
 		p_ret->d.binop.p_rhs = NULL;
 	} else if (p_token->cls == &TOK_NULL) {
-		if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
-			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->cls   = &AST_CLS_LITERAL_NULL;
 	} else if (p_token->cls == &TOK_TRUE) {
-		if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
-			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->cls = &AST_CLS_LITERAL_BOOL;
 		p_ret->d.i = 1;
 	} else if (p_token->cls == &TOK_FALSE) {
-		if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
-			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->cls = &AST_CLS_LITERAL_BOOL;
 		p_ret->d.i = 0;
 	} else if (p_token->cls == &TOK_RANGE) {
-		if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
-			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->cls   = &AST_CLS_RANGE;
 		if ((p_ret->d.builtin.p_args = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
 	} else if (p_token->cls == &TOK_FORMAT) {
-		if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
-			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->cls   = &AST_CLS_FORMAT;
 		if ((p_ret->d.builtin.p_args = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
@@ -803,7 +782,6 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 
 		p_workspace->stack_depth += nb_args;
 
-		p_ret               = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls          = &AST_CLS_FUNCTION;
 		p_ret->d.fn.nb_args = nb_args;
 		if ((p_ret->d.fn.node = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
@@ -819,7 +797,6 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		}
 
 	} else if (p_token->cls == &TOK_CALL) {
-		p_ret             = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node));
 		p_ret->cls        = &AST_CLS_CALL;
 		p_ret->d.call.fn  = expect_expression(p_workspace, p_tokeniser, p_error_handler);
 		if (p_ret->d.call.fn == NULL)
