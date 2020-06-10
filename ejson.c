@@ -831,7 +831,7 @@ const struct ast_node *expect_expression_1(const struct ast_node *p_lhs, struct 
 		    &&  (   p_token->cls->precedence > p_op->precedence  /* whose precedence is greater than op's */
 		        ||  (p_token->cls->right_associative && p_token->cls->precedence == p_op->precedence) /* or a right-associative operator whose precedence is equal to op's */
 		        )
-			) {
+		    ) {
 			if ((p_rhs = expect_expression_1(p_rhs, p_workspace, p_tokeniser, p_token->cls->precedence, p_error_handler)) == NULL)
 				return NULL; /* No error message is needed here. The recursion guarantees that the previous error will trigger at the same token. */
 		}
@@ -1892,63 +1892,8 @@ int main(int argc, char *argv[]) {
 		,"use map to generate a list of dicts"
 		);
 
-	/* Expected fail tests */
-	run_test
-		("1+\"a\""
-		,NULL
-		,"arguments to operators must be integers of floats"
-		);
-	run_test
-		("-\"a\""
-		,NULL
-		,"arguments to unary negate must be an integer or a float"
-		);
-	run_test
-		("{1: null}"
-		,NULL
-		,"dictionary keys must evaluate to strings"
-		);
-	run_test
-		("func(x) x"
-		,NULL
-		,"the evaluation of the root node cannot be a function"
-		);
-	run_test
-		("call func() 1 [1, 2]"
-		,NULL
-		,"call a function with incorrect number of arguments (0)"
-		);
-	run_test
-		("call func(x) x [1, 2]"
-		,NULL
-		,"call a function with incorrect number of arguments (1)"
-		);
-	run_test
-		("9 + ("
-		,NULL
-		,"expect expression after ("
-		);
-	run_test
-		("9 + 8 * k"
-		,NULL
-		,"failure to parse rhs due to identifier not existing"
-		);
-	run_test
-		("(1,"
-		,NULL
-		,"failure because expect )"
-		);
-	run_test
-		("["
-		,NULL
-		,"failure because need more tokens"
-		);
-	run_test
-		("[1,ggg"
-		,NULL
-		,"failure because need more tokens"
-		);
-	
+	/* expected fail tests due to bad parsing syntax */
+
 	/* func error tests */
 	run_test
 		("func"
@@ -2013,7 +1958,7 @@ int main(int argc, char *argv[]) {
 		,"listval could not parse second expression"
 		);
 
-	/* Map tests */
+	/* map tests */
 	run_test
 		("map"
 		,NULL
@@ -2061,6 +2006,68 @@ int main(int argc, char *argv[]) {
 		,NULL
 		,"define expects a semicolon"
 		);
+
+	/* lparen error tests */
+	run_test
+		("("
+		,NULL
+		,"expect expression after ("
+		);
+	run_test
+		("9 + 8 * k"
+		,NULL
+		,"failure to parse rhs due to identifier not existing"
+		);
+	run_test
+		("(1,"
+		,NULL
+		,"failure because expect )"
+		);
+	run_test
+		("["
+		,NULL
+		,"failure because need more tokens"
+		);
+	run_test
+		("[1,ggg"
+		,NULL
+		,"failure because need more tokens"
+		);
+
+	/* expected evaluation time failure tests due to bad algorithm */
+
+	run_test
+		("1+\"a\""
+		,NULL
+		,"arguments to operators must be integers of floats"
+		);
+	run_test
+		("-\"a\""
+		,NULL
+		,"arguments to unary negate must be an integer or a float"
+		);
+	run_test
+		("{1: null}"
+		,NULL
+		,"dictionary keys must evaluate to strings"
+		);
+	run_test
+		("func(x) x"
+		,NULL
+		,"the evaluation of the root node cannot be a function"
+		);
+	run_test
+		("call func() 1 [1, 2]"
+		,NULL
+		,"call a function with incorrect number of arguments (0)"
+		);
+	run_test
+		("call func(x) x [1, 2]"
+		,NULL
+		,"call a function with incorrect number of arguments (1)"
+		);
+
+	
 
 #if 0
 	/* This is more an experiment than a test. */
