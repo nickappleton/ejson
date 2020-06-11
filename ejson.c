@@ -106,6 +106,7 @@ struct ast_node {
 		struct {
 			const struct ast_node  *node;
 			unsigned                nb_args;
+			unsigned                stack_depth_at_function_def;
 		} fn; /* AST_CLS_FUNCTION */
 		struct {
 			const struct ast_node  *fn;
@@ -772,13 +773,14 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 			} while (1);
 		}
 
-		p_workspace->stack_depth += nb_args;
 
-		p_ret->cls          = &AST_CLS_FUNCTION;
-		p_ret->d.fn.nb_args = nb_args;
+		p_ret->cls                              = &AST_CLS_FUNCTION;
+		p_ret->d.fn.nb_args                     = nb_args;
+		p_ret->d.fn.stack_depth_at_function_def = p_workspace->stack_depth;
+
+		p_workspace->stack_depth += nb_args;
 		if ((p_ret->d.fn.node = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
-
 		p_workspace->stack_depth -= nb_args;
 
 		for (i = 0; i < nb_args; i++) {
@@ -930,13 +932,16 @@ const struct ast_node *ast_list_generator_map(const struct ast_node *p_src, unsi
 	/* Evaluate argument and shove on stack */
 	if ((p_argument = p_list->d.lgen.get_element(p_list, element, p_alloc, p_error_handler)) == NULL)
 		return (ejson_error(p_error_handler, "could not get list item\n"), NULL);
-	if ((pp_tmp = linear_allocator_alloc(p_alloc, sizeof(struct ast_node *) * (p_src->d.lgen.stack_size + 1))) == NULL)
-		return ejson_error_null(p_error_handler, "out of memory\n");
-	if (p_src->d.lgen.stack_size)
-		memcpy(pp_tmp, p_src->d.lgen.pp_stack, p_src->d.lgen.stack_size * sizeof(struct ast_node *));
-	pp_tmp[p_src->d.lgen.stack_size] = p_argument;
 
-	return evaluate_ast(p_function->d.fn.node, pp_tmp, p_src->d.lgen.stack_size + 1, p_alloc, p_error_handler);
+	assert(p_src->d.lgen.stack_size == p_function->d.fn.stack_depth_at_function_def || !p_function->d.fn.stack_depth_at_function_def);
+
+	if ((pp_tmp = linear_allocator_alloc(p_alloc, sizeof(struct ast_node *) * (p_function->d.fn.stack_depth_at_function_def + 1))) == NULL)
+		return ejson_error_null(p_error_handler, "out of memory\n");
+	if (p_function->d.fn.stack_depth_at_function_def)
+		memcpy(pp_tmp, p_src->d.lgen.pp_stack, p_function->d.fn.stack_depth_at_function_def * sizeof(struct ast_node *));
+	pp_tmp[p_function->d.fn.stack_depth_at_function_def] = p_argument;
+
+	return evaluate_ast(p_function->d.fn.node, pp_tmp, p_function->d.fn.stack_depth_at_function_def + 1, p_alloc, p_error_handler);
 }
 
 const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct ast_node **pp_stackx, unsigned stack_sizex, struct linear_allocator *p_alloc, const struct ejson_error_handler *p_error_handler) {
@@ -1150,17 +1155,18 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 			return ejson_location_error_null(p_error_handler, &(p_src->doc_pos), "the number of arguments supplied to function was incorrect (expected %u but got %u)\n", p_function->d.fn.nb_args, p_args->d.lgen.nb_elements);
 		if (p_args->d.lgen.nb_elements) {
 			unsigned i;
-			if ((pp_stack2 = linear_allocator_alloc(p_alloc, sizeof(struct ast_node *) * (stack_sizex + p_args->d.lgen.nb_elements))) == NULL)
+			assert(stack_sizex == p_function->d.fn.stack_depth_at_function_def || !p_function->d.fn.stack_depth_at_function_def);
+			if ((pp_stack2 = linear_allocator_alloc(p_alloc, sizeof(struct ast_node *) * (p_function->d.fn.stack_depth_at_function_def + p_args->d.lgen.nb_elements))) == NULL)
 				return ejson_error_null(p_error_handler, "out of memory\n");
-			if (stack_sizex)
-				memcpy(pp_stack2, pp_stackx, stack_sizex * sizeof(struct ast_node *));
+			if (p_function->d.fn.stack_depth_at_function_def)
+				memcpy(pp_stack2, pp_stackx, p_function->d.fn.stack_depth_at_function_def * sizeof(struct ast_node *));
 			for (i = 0; i < p_args->d.lgen.nb_elements; i++) {
-				if ((pp_stack2[stack_sizex + i] = p_args->d.lgen.get_element(p_args, i, p_alloc, p_error_handler)) == NULL)
+				if ((pp_stack2[p_function->d.fn.stack_depth_at_function_def + i] = p_args->d.lgen.get_element(p_args, i, p_alloc, p_error_handler)) == NULL)
 					return ejson_error_null(p_error_handler, "failed to evaluate list element %d because\n", i);
 			}
 		}
 
-		return evaluate_ast(p_function->d.fn.node, pp_stack2, stack_sizex + p_args->d.lgen.nb_elements, p_alloc, p_error_handler);
+		return evaluate_ast(p_function->d.fn.node, pp_stack2, p_function->d.fn.stack_depth_at_function_def + p_args->d.lgen.nb_elements, p_alloc, p_error_handler);
 	}
 
 	/* Unary negation */
@@ -1783,6 +1789,11 @@ int main(int argc, char *argv[]) {
 		 "access test)"
 		);
 	run_test
+		("define fz = func(x, y, z) x - y * z; call func(x) call func(y) call fz [x, y, 3] [5] [7]"
+		,"-8"
+		,"triple nested function call calling a workspace defined function (test stack behavior when calling defined function)"
+		);
+	run_test
 		("call func(x) call func(y) call func(z) x - y * z [3] [5] [7]"
 		,"-8"
 		,"triple nested function call"
@@ -1856,6 +1867,11 @@ int main(int argc, char *argv[]) {
 		("call func(x) call func(y) map func(z) [1, z, z*z] [y-1] [x-2] [4]"
 		,"[[1,1,1]]"
 		,"advanced map/function test 3"
+		);
+	run_test
+		("define far_call = func(z) [1, z, z*z]; call func(x) call func(y) map far_call [y-1] [x-2] [4]"
+		,"[[1,1,1]]"
+		,"advanced map/function test 3 (inner far call)"
 		);
 	run_test
 		("map func(x) [1, x, x*x] [1,2,3]"

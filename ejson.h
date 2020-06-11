@@ -25,6 +25,7 @@ struct evaluation_context {
 	struct pdict            workspace;
 	struct linear_allocator alloc;
 	unsigned                stack_depth;
+	unsigned                current_statement;
 
 };
 
