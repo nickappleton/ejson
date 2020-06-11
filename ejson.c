@@ -738,12 +738,12 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		uintptr_t       argnames[32];
 		if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
-		if (p_token->cls != &TOK_LPAREN)
-			return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "expected an open parenthesis\n");
+		if (p_token->cls != &TOK_LSQBR)
+			return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "expected a [\n");
 		if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
 
-		if (p_token->cls != &TOK_RPAREN) {
+		if (p_token->cls != &TOK_RSQBR) {
 			do {
 				const struct istring *k;
 				struct token_pos_info identpos;
@@ -755,8 +755,8 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 					return ejson_error_null(p_error_handler, "out of memory\n");
 				if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
 					return NULL;
-				if (p_token->cls != &TOK_COMMA && p_token->cls != &TOK_RPAREN)
-					return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "expected a comma or close parenthesis\n");
+				if (p_token->cls != &TOK_COMMA && p_token->cls != &TOK_RSQBR)
+					return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "expected a , or ]\n");
 				argnames[nb_args] = (uintptr_t)(k->cstr);
 				node = pdict_get(&(p_workspace->workspace), argnames[nb_args]);
 				if (node != NULL)
@@ -766,7 +766,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 				if (pdict_set(&(p_workspace->workspace), argnames[nb_args], &(args[nb_args])))
 					return ejson_error_null(p_error_handler, "out of memory\n");
 				nb_args++;
-				if (p_token->cls == &TOK_RPAREN)
+				if (p_token->cls == &TOK_RSQBR)
 					break;
 				if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
 					return NULL;
@@ -1761,63 +1761,63 @@ int main(int argc, char *argv[]) {
 	
 	/* function tests */
 	run_test
-		("call func() 1 []"
+		("call func[] 1 []"
 		,"1"
 		,"calling a function that takes no arguments and returns 1"
 		);
 	run_test
-		("call func(x) x [55]"
+		("call func[x] x [55]"
 		,"55"
 		,"calling a function that takes one argument and returns its value"
 		);
 	run_test
-		("call func(x) [x] [55]"
+		("call func[x] [x] [55]"
 		,"[55]"
 		,"calling a function that takes one argument and returns its value "
 		 "in a list"
 		);
 	run_test
-		("call func(x, y, z) x * y + z [3, 5, 7]"
+		("call func[x, y, z] x * y + z [3, 5, 7]"
 		,"22"
 		,"calling a function that multiplies the first two arguments and "
 		 "adds the third (test order of arguments on stack)"
 		);
 	run_test
-		("call func(x, y) call func(z) x - y * z [3] [5, 7]"
+		("call func[x, y] call func[z] x - y * z [3] [5, 7]"
 		,"-16"
 		,"calling a function that contains another function (nested stack "
 		 "access test)"
 		);
 	run_test
-		("define fz = func(x, y, z) x - y * z; call func(x) call func(y) call fz [x, y, 3] [5] [7]"
+		("define fz = func[x, y, z] x - y * z; call func[x] call func[y] call fz [x, y, 3] [5] [7]"
 		,"-8"
 		,"triple nested function call calling a workspace defined function (test stack behavior when calling defined function)"
 		);
 	run_test
-		("call func(x) call func(y) call func(z) x - y * z [3] [5] [7]"
+		("call func[x] call func[y] call func[z] x - y * z [3] [5] [7]"
 		,"-8"
 		,"triple nested function call"
 		);
 	run_test
-		("call func(y) call y [] [func() 111]"
+		("call func[y] call y [] [func[] 111]"
 		,"111"
 		,"calling a function that calls the given function passed as an "
 		 "argument"
 		);
 	run_test
-		("call func(x) [1, x, 2, 3] [50]"
+		("call func[x] [1, x, 2, 3] [50]"
 		,"[1, 50, 2, 3]"
 		,"a function that returns a 4 element list with the second element "
 		 "equal to the argument"
 		);
 	run_test
-		("call func(x, y, z) x * y + z call func(x) [3, 5, x] [7]"
+		("call func[x, y, z] x * y + z call func[x] [3, 5, x] [7]"
 		,"22"
 		,"calling a function where the arguments are the list produced by "
 		 "calling another function"
 		);
 	run_test
-		("call func(x, y, z) x * y + z range[4, 6]"
+		("call func[x, y, z] x * y + z range[4, 6]"
 		,"26"
 		,"calling a function where the arguments are the list produced by "
 		 "calling range"
@@ -1830,7 +1830,7 @@ int main(int argc, char *argv[]) {
 		,"use a workspace variable"
 		);
 	run_test
-		("define x = func(z) z*z; define y = 7; call x [y]"
+		("define x = func[z] z*z; define y = 7; call x [y]"
 		,"49"
 		,"use a workspace variable as a function"
 		);
@@ -1847,49 +1847,49 @@ int main(int argc, char *argv[]) {
 		,"extracting an element of a generated list"
 		);
 	run_test
-		("listval call func(x) [1, x, 2, 3] [50] 1"
+		("listval call func[x] [1, x, 2, 3] [50] 1"
 		,"50"
 		,"extracting an element of the list returned by a function"
 		);
 
 	/* map tests */
 	run_test
-		("call func(y) map func(x) [1, x, x*x] [y+1] [3]"
+		("call func[y] map func[x] [1, x, x*x] [y+1] [3]"
 		,"[[1,4,16]]"
 		,"advanced map/function test 1"
 		);
 	run_test
-		("call func(y) map func(x) [1, x, x*x] range[1,y] [3]"
+		("call func[y] map func[x] [1, x, x*x] range[1,y] [3]"
 		,"[[1,1,1],[1,2,4],[1,3,9]]"
 		,"advanced map/function test 2"
 		);
 	run_test
-		("call func(x) call func(y) map func(z) [1, z, z*z] [y-1] [x-2] [4]"
+		("call func[x] call func[y] map func[z] [1, z, z*z] [y-1] [x-2] [4]"
 		,"[[1,1,1]]"
 		,"advanced map/function test 3"
 		);
 	run_test
-		("define far_call = func(z) [1, z, z*z]; call func(x) call func(y) map far_call [y-1] [x-2] [4]"
+		("define far_call = func[z] [1, z, z*z]; call func[x] call func[y] map far_call [y-1] [x-2] [4]"
 		,"[[1,1,1]]"
 		,"advanced map/function test 3 (inner far call)"
 		);
 	run_test
-		("map func(x) [1, x, x*x] [1,2,3]"
+		("map func[x] [1, x, x*x] [1,2,3]"
 		,"[[1,1,1],[1,2,4],[1,3,9]]"
 		,"map operation basics"
 		);
 	run_test
-		("map func(x) listval [\"a\",\"b\",\"c\",\"d\",\"e\"] x%5 range[-2,1,8]"
+		("map func[x] listval [\"a\",\"b\",\"c\",\"d\",\"e\"] x%5 range[-2,1,8]"
 		,"[\"d\",\"e\",\"a\",\"b\",\"c\",\"d\",\"e\",\"a\",\"b\",\"c\",\"d\"]"
 		,"map over a range basics"
 		);
 	run_test
-		("map func(x) range[x] range[0,5]"
+		("map func[x] range[x] range[0,5]"
 		,"[[],[0],[0,1],[0,1,2],[0,1,2,3],[0,1,2,3,4]]"
 		,"use map to generate a list of incrementing ranges over a range"
 		);
 	run_test
-		("range call func() [1,2,9] []"
+		("range call func[] [1,2,9] []"
 		,"[1,3,5,7,9]"
 		,"call range with arguments given by the result of a function call"
 		);
@@ -1916,12 +1916,12 @@ int main(int argc, char *argv[]) {
 		,"test format with an integer and string argument"
 		);
 	run_test
-		("map func(x) format[\"%03d-%s.wav\", x, listval [\"c\", \"d\", \"e\"] x%3] range[36,40]"
+		("map func[x] format[\"%03d-%s.wav\", x, listval [\"c\", \"d\", \"e\"] x%3] range[36,40]"
 		,"[\"036-c.wav\", \"037-d.wav\", \"038-e.wav\", \"039-c.wav\", \"040-d.wav\"]"
 		,"test using format to generate mapped strings"
 		);
 	run_test
-		("call listval [func(x) x+1, func(x) x+2, func(x) x+3] 1 [10]"
+		("call listval [func[x] x+1, func[x] x+2, func[x] x+3] 1 [10]"
 		,"12"
 		,"test calling a function that is in a list of functions"
 		);
@@ -1929,7 +1929,7 @@ int main(int argc, char *argv[]) {
 	/* FIXME: something is broken i think with the test comparison function. */
 	run_test
 		("define notes=[\"a\",\"b\",\"c\"];\n"
-		 "map func(x)\n"
+		 "map func[x]\n"
 		 "  {\"name\": listval notes x % 3, \"id\": x} range[0,5]\n"
 		,"[{\"id\":0,\"name\":\"a\"}"
 		 ",{\"id\":1,\"name\":\"b\"}"
@@ -1955,32 +1955,32 @@ int main(int argc, char *argv[]) {
 		,"func expects open parenthesis"
 		);
 	run_test
-		("func (sadsa 1"
+		("func [sadsa 1"
 		,NULL
 		,"func expects comma or close parenthesis"
 		);
 	run_test
-		("func (sadsa, 1"
+		("func [sadsa, 1"
 		,NULL
 		,"func arguments must be literals"
 		);
 	run_test
-		("func (sadsa 1)"
+		("func [sadsa 1]"
 		,NULL
 		,"func expects a function body"
 		);
 	run_test
-		("func (sadsa 1) ("
+		("func [sadsa 1] ["
 		,NULL
 		,"func cannot parse function body"
 		);
 	run_test
-		("func (sadsa, sadsa) 1"
+		("func [sadsa, sadsa] 1"
 		,NULL
 		,"func arguments must not alias each other"
 		);
 	run_test
-		("define sadsa = 1; func (sadsa) 1"
+		("define sadsa = 1; func [sadsa] 1"
 		,NULL
 		,"func arguments must not alias workspace variables"
 		);
@@ -2096,17 +2096,17 @@ int main(int argc, char *argv[]) {
 		,"map expects a function argument that takes one argument"
 		);
 	run_test
-		("map func() 1 [1,2,3]"
+		("map func[] 1 [1,2,3]"
 		,NULL
 		,"map expects a function argument that takes one argument"
 		);
 	run_test
-		("map func(x, y) 1 [1,2,3]"
+		("map func[x, y] 1 [1,2,3]"
 		,NULL
 		,"map expects a function argument that takes one argument"
 		);
 	run_test
-		("map func(x) x {}"
+		("map func[x] x {}"
 		,NULL
 		,"map expected a list argument following the function"
 		);
@@ -2145,42 +2145,27 @@ int main(int argc, char *argv[]) {
 		,"dictionary keys must evaluate to strings"
 		);
 	run_test
-		("define x = call func() 1 [];\n {x: null}"
+		("define x = call func[] 1 [];\n {x: null}"
 		,NULL
 		,"dictionary keys must evaluate to strings"
 		);
 	run_test
-		("func(x) x"
+		("func[x] x"
 		,NULL
 		,"the evaluation of the root node cannot be a function"
 		);
 	run_test
-		("call func() 1 [1, 2]"
+		("call func[] 1 [1, 2]"
 		,NULL
 		,"call a function with incorrect number of arguments (0)"
 		);
 	run_test
-		("call func(x) x [1, 2]"
+		("call func[x] x [1, 2]"
 		,NULL
 		,"call a function with incorrect number of arguments (1)"
 		);
 
 	
-
-#if 0
-	/* This is more an experiment than a test. */
-	run_test
-		("define names = [\"c\", \"c#\", \"d\", \"d#\", \"e\", \"f\", \"f#\", \"g\", \"g#\", \"a\", \"a#\", \"b\"];"
-		 "define filename_gen = func(p, y) format[\"%s/%03d-%s.wav\", p, y, listval names y % 12];"
-		 "map "
-		 "  func(x) "
-		 "    {\"attack-samples\": [call filename_gen [\"Bourdon 8/A0\", x]]"
-		 "    }"
-		 "  range[36,96]"
-		,"0"
-		,"func cannot parse function body"
-		);
-#endif
 
 	//run_test("{}", "{}", "empty dict");
 
