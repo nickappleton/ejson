@@ -7,11 +7,33 @@
 #include <string.h>
 #include <math.h>
 #include "linear_allocator.h"
-#include "../istrings.h"
-#include "../pdict.h"
 #include "parse_helpers.h"
 
+
 #define MAX_TOK_STRING (4096)
+
+struct token {
+	const struct tok_def  *cls;
+	struct token_pos_info  posinfo;
+	union {
+		struct {
+			size_t len;
+			char   str[MAX_TOK_STRING];
+		} strident;
+		long long tint;
+		double    tflt;
+	} t;
+};
+
+
+struct token;
+
+struct tok_def {
+	const char           *name;
+	int                   precedence;
+	int                   right_associative;
+	const struct ast_cls *bin_op_cls;
+};
 
 #ifndef ejson_error
 #ifdef EJSON_NO_ERROR_MESSAGES
@@ -153,28 +175,6 @@ static size_t hashfnv(const char *p_str, uint_fast32_t *p_hash) {
 	*p_hash = hash;
 	return length;
 }
-
-struct token;
-
-struct tok_def {
-	const char           *name;
-	int                   precedence;
-	int                   right_associative;
-	const struct ast_cls *bin_op_cls;
-};
-
-struct token {
-	const struct tok_def  *cls;
-	struct token_pos_info  posinfo;
-	union {
-		struct {
-			size_t len;
-			char   str[MAX_TOK_STRING];
-		} strident;
-		long long tint;
-		double    tflt;
-	} t;
-};
 
 #define TOK_DECL(name_, precedence_, right_associative_, binop_ast_cls_) \
 	static const struct tok_def name_ = {#name_, precedence_, right_associative_, binop_ast_cls_}
@@ -553,7 +553,7 @@ const struct token *tok_read(struct tokeniser *p_tokeniser, const struct ejson_e
 	return p_temp;
 }
 
-static int tokeniser_start(struct tokeniser *p_tokeniser, char *buf) {
+static int tokeniser_start(struct tokeniser *p_tokeniser, const char *buf) {
 	p_tokeniser->line_nb      = 1;
 	p_tokeniser->p_line_start = buf;
 	p_tokeniser->buf          = buf;
@@ -562,13 +562,6 @@ static int tokeniser_start(struct tokeniser *p_tokeniser, char *buf) {
 	return (tok_read(p_tokeniser, NULL) == NULL) ? 1 : 0;
 }
 
-struct evaluation_context {
-	struct istrings         strings;
-	struct pdict            workspace;
-	struct linear_allocator alloc;
-	unsigned                stack_depth;
-
-};
 
 int evaluation_context_init(struct evaluation_context *p_ctx) {
 	if (istrings_init(&(p_ctx->strings)))
@@ -915,6 +908,7 @@ const struct ast_node *get_literal_element_fn(const struct ast_node *p_src, unsi
 		return (ejson_error(p_error_handler, "list index out of bounds\n"), NULL);
 	if ((p_src = evaluate_ast(p_src->d.lgen.d.literal.pp_values[element], p_src->d.lgen.pp_stack, p_src->d.lgen.stack_size, p_alloc, p_error_handler)) == NULL)
 		return (ejson_error(p_error_handler, "list index out of bounds\n"), NULL);
+
 	return p_src;
 }
 
@@ -950,7 +944,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 	while (p_src->cls == &AST_CLS_STACKREF) {
 		assert(pp_stackx != NULL);
 		assert(p_src->d.i > 0 && p_src->d.i <= stack_sizex);
-		p_src = pp_stackx[stack_sizex - p_src->d.i];
+		p_src = pp_stackx[p_src->d.i - 1];
 		assert(p_src != NULL);
 	}
 	
@@ -1041,8 +1035,10 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 					const struct ast_node *p_argval;
 					if (argidx >= p_args->d.lgen.nb_elements)
 						return (ejson_error(p_error_handler, "not enough arguments given to format\n"), NULL);
-					if ((p_argval = p_args->d.lgen.get_element(p_args, argidx++, p_alloc, p_error_handler)) == NULL || p_argval->cls != &AST_CLS_LITERAL_STRING)
-						return (ejson_error(p_error_handler, "%%s expects a string argument\n"), NULL);
+					if ((p_argval = p_args->d.lgen.get_element(p_args, argidx++, p_alloc, p_error_handler)) == NULL)
+						return NULL;
+					if (p_argval->cls != &AST_CLS_LITERAL_STRING)
+						return (ejson_error(p_error_handler, "%%s expects a string argument (%s)\n", p_argval->cls->p_name), NULL);
 					memcpy(&(strbuf[i]), p_argval->d.str.p_data, p_argval->d.str.len);
 					i += p_argval->d.str.len;
 				} else {
@@ -1159,7 +1155,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 			if (stack_sizex)
 				memcpy(pp_stack2, pp_stackx, stack_sizex * sizeof(struct ast_node *));
 			for (i = 0; i < p_args->d.lgen.nb_elements; i++) {
-				if ((pp_stack2[stack_sizex + p_args->d.lgen.nb_elements - 1 - i] = p_args->d.lgen.get_element(p_args, i, p_alloc, p_error_handler)) == NULL)
+				if ((pp_stack2[stack_sizex + i] = p_args->d.lgen.get_element(p_args, i, p_alloc, p_error_handler)) == NULL)
 					return ejson_error_null(p_error_handler, "failed to evaluate list element %d because\n", i);
 			}
 		}
@@ -1525,6 +1521,7 @@ int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace,
 		return 1;
 	if ((p_token = tok_peek(p_tokeniser)) != NULL)
 		return ejson_location_error(p_error_handler, &(p_token->posinfo), "expected no more tokens at end of document\n", p_token->cls->name);
+	//p_obj->cls->debug_print(p_obj, stdout, 0);
 	if ((p_root = evaluate_ast(p_obj, NULL, 0, &(p_workspace->alloc), p_error_handler)) == NULL)
 		return 1;
 	if (to_jnode(p_node, p_root, &(p_workspace->alloc), p_error_handler))
@@ -1532,8 +1529,19 @@ int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace,
 	return 0;
 }
 
+int ejson_load(struct jnode *p_node, struct evaluation_context *p_workspace, const char *p_document, struct ejson_error_handler *p_error_handler) {
+	struct tokeniser t;
 
-#if EJSON_TEST||1
+	if (tokeniser_start(&t, p_document))
+		return ejson_error(p_error_handler, "could not initialise tokeniser\n");
+
+	return parse_document(p_node, p_workspace, &t, p_error_handler);
+
+}
+//int parse_document();
+
+
+#if EJSON_TEST
 
 #include "json_simple_load.h"
 #include "json_iface_utils.h"
@@ -1567,7 +1575,6 @@ static void on_parser_error(void *p_context, const struct token_pos_info *p_loca
 
 int run_test(const char *p_ejson, const char *p_ref, const char *p_name) {
 	struct jnode dut;
-	struct tokeniser t;
 	struct evaluation_context ws;
 	struct ejson_error_handler err;
 	int d;
@@ -1575,13 +1582,10 @@ int run_test(const char *p_ejson, const char *p_ref, const char *p_name) {
 	err.p_context = NULL;
 	err.on_parser_error = on_parser_error;
 
-	if (tokeniser_start(&t, (char *)p_ejson))
-		return unexpected_fail("could not init tokeniser\n");
-
 	if (evaluation_context_init(&ws))
 		return unexpected_fail("could not init workspace\n");
 
-	if (parse_document(&dut, &ws, &t, &err)) {
+	if (ejson_load(&dut, &ws, p_ejson, &err)) {
 		if (p_ref != NULL) {
 			fprintf(stderr, "FAILED: test '%s' failed due to above messages.\n", p_name);
 			return -1;
@@ -1611,7 +1615,7 @@ int run_test(const char *p_ejson, const char *p_ref, const char *p_name) {
 		}
 		
 		if (d) {
-			fprintf(stderr, "test '%s' failed:\n", p_name);
+			fprintf(stderr, "FAILED: test '%s':\n", p_name);
 			fprintf(stderr, "  Reference:\n    ");
 			jnode_print(&ref, &a2, 4);
 			fprintf(stderr, "  DUT:\n    ");
@@ -1774,13 +1778,13 @@ int main(int argc, char *argv[]) {
 		);
 	run_test
 		("call func(x, y) call func(z) x - y * z [3] [5, 7]"
-		,"-32"
+		,"-16"
 		,"calling a function that contains another function (nested stack "
 		 "access test)"
 		);
 	run_test
 		("call func(x) call func(y) call func(z) x - y * z [3] [5] [7]"
-		,"-32"
+		,"-8"
 		,"triple nested function call"
 		);
 	run_test
@@ -1838,6 +1842,21 @@ int main(int argc, char *argv[]) {
 		);
 
 	/* map tests */
+	run_test
+		("call func(y) map func(x) [1, x, x*x] [y+1] [3]"
+		,"[[1,4,16]]"
+		,"advanced map/function test 1"
+		);
+	run_test
+		("call func(y) map func(x) [1, x, x*x] range[1,y] [3]"
+		,"[[1,1,1],[1,2,4],[1,3,9]]"
+		,"advanced map/function test 2"
+		);
+	run_test
+		("call func(x) call func(y) map func(z) [1, z, z*z] [y-1] [x-2] [4]"
+		,"[[1,1,1]]"
+		,"advanced map/function test 3"
+		);
 	run_test
 		("map func(x) [1, x, x*x] [1,2,3]"
 		,"[[1,1,1],[1,2,4],[1,3,9]]"
