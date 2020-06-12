@@ -268,6 +268,12 @@ DEF_AST_CLS(AST_CLS_MUL,             NULL, debug_print_binop);
 DEF_AST_CLS(AST_CLS_DIV,             NULL, debug_print_binop);
 DEF_AST_CLS(AST_CLS_MOD,             NULL, debug_print_binop);
 DEF_AST_CLS(AST_CLS_EXP,             NULL, debug_print_binop);
+DEF_AST_CLS(AST_CLS_EQ,              NULL, debug_print_binop);
+DEF_AST_CLS(AST_CLS_NEQ,             NULL, debug_print_binop);
+DEF_AST_CLS(AST_CLS_LT,              NULL, debug_print_binop);
+DEF_AST_CLS(AST_CLS_LEQ,             NULL, debug_print_binop);
+DEF_AST_CLS(AST_CLS_GEQ,             NULL, debug_print_binop);
+DEF_AST_CLS(AST_CLS_GT,              NULL, debug_print_binop);
 DEF_AST_CLS(AST_CLS_RANGE,           NULL, debug_print_builtin);
 DEF_AST_CLS(AST_CLS_FUNCTION,        NULL, debug_print_function);
 DEF_AST_CLS(AST_CLS_CALL,            NULL, debug_print_call);
@@ -287,14 +293,21 @@ TOK_DECL(TOK_FLOAT,      -1, 0, NULL); /* 13123.0 | .123 */
 /* Binary operators */
 TOK_DECL(TOK_LOGOR,       1, 0, &AST_CLS_LOGOR);  /* or */
 TOK_DECL(TOK_LOGAND,      2, 0, &AST_CLS_LOGAND); /* and */
-TOK_DECL(TOK_BITOR,       3, 0, &AST_CLS_BITOR);  /* | */
-TOK_DECL(TOK_BITAND,      4, 0, &AST_CLS_BITAND); /* & */
-TOK_DECL(TOK_ADD,         5, 0, &AST_CLS_ADD);    /* + */
-TOK_DECL(TOK_SUB,         5, 0, &AST_CLS_SUB);    /* - */
-TOK_DECL(TOK_MUL,         6, 0, &AST_CLS_MUL);    /* * */
-TOK_DECL(TOK_DIV,         6, 0, &AST_CLS_DIV);    /* / */
-TOK_DECL(TOK_MOD,         6, 0, &AST_CLS_MOD);    /* % */
-TOK_DECL(TOK_EXP,         7, 1, &AST_CLS_EXP);    /* ^ */
+TOK_DECL(TOK_EQ,          3, 0, &AST_CLS_EQ);     /* == */
+TOK_DECL(TOK_NEQ,         3, 0, &AST_CLS_NEQ);    /* != */
+TOK_DECL(TOK_GT,          4, 0, &AST_CLS_GT);     /* > */
+TOK_DECL(TOK_GEQ,         4, 0, &AST_CLS_GEQ);    /* >= */
+TOK_DECL(TOK_LT,          4, 0, &AST_CLS_LT);     /* < */
+TOK_DECL(TOK_LEQ,         4, 0, &AST_CLS_LEQ);    /* <= */
+TOK_DECL(TOK_BITOR,       5, 0, &AST_CLS_BITOR);  /* | */
+TOK_DECL(TOK_BITAND,      6, 0, &AST_CLS_BITAND); /* & */
+TOK_DECL(TOK_ADD,         7, 0, &AST_CLS_ADD);    /* + */
+TOK_DECL(TOK_SUB,         7, 0, &AST_CLS_SUB);    /* - */
+TOK_DECL(TOK_MUL,         8, 0, &AST_CLS_MUL);    /* * */
+TOK_DECL(TOK_DIV,         8, 0, &AST_CLS_DIV);    /* / */
+TOK_DECL(TOK_MOD,         8, 0, &AST_CLS_MOD);    /* % */
+TOK_DECL(TOK_EXP,         9, 1, &AST_CLS_EXP);    /* ^ */
+
 
 /* String */
 TOK_DECL(TOK_STRING,     -1, 0, NULL); /* "afasfasf" */
@@ -320,7 +333,7 @@ TOK_DECL(TOK_LPAREN,     -1, 0, NULL); /* ( */
 TOK_DECL(TOK_RPAREN,     -1, 0, NULL); /* ) */
 TOK_DECL(TOK_LSQBR,      -1, 0, NULL); /* [ */
 TOK_DECL(TOK_RSQBR,      -1, 0, NULL); /* ] */
-TOK_DECL(TOK_EQ,         -1, 0, NULL); /* = */
+TOK_DECL(TOK_ASSIGN,     -1, 0, NULL); /* = */
 TOK_DECL(TOK_COLON,      -1, 0, NULL); /* : */
 TOK_DECL(TOK_SEMI,       -1, 0, NULL); /* ; */
 
@@ -363,14 +376,13 @@ void tok_get_nearest_location(const struct tokeniser *p_tokeniser, struct token_
 
 const struct token *tok_read(struct tokeniser *p_tokeniser, const struct ejson_error_handler *p_error_handler) {
 	struct token *p_temp;
-	char c;
+	char c, nc;
 	int in_comment;
 
 	/* eat whitespace and comments */
 	c          = *(p_tokeniser->buf++);
 	in_comment = (c == '#');
 	while (c == ' ' || c == '\t' || c == '\r' || c == '\n' || in_comment) {
-		char nc;
 		nc = *(p_tokeniser->buf++);
 		if (c == '\r' || c == '\n') {
 			in_comment = 0;
@@ -397,6 +409,8 @@ const struct token *tok_read(struct tokeniser *p_tokeniser, const struct ejson_e
 		}
 		return ejson_location_error_null(p_error_handler, &(p_tokeniser->p_current->posinfo), "expected another token\n");
 	}
+
+	nc = *(p_tokeniser->buf);
 
 	assert(c != '#');
 
@@ -537,7 +551,30 @@ const struct token *tok_read(struct tokeniser *p_tokeniser, const struct ejson_e
 		} else if (!strcmp(p_temp->t.strident.str, "or")) { p_temp->cls = &TOK_LOGOR;
 		} else { p_temp->cls = &TOK_IDENTIFIER; }
 
-	} else if (c == '=') { p_temp->cls = &TOK_EQ;
+	} else if (c == '!' && nc == '=') {
+		p_tokeniser->buf++;
+		p_temp->cls = &TOK_NEQ;
+	} else if (c == '=') {
+		if (nc == '=') {
+			p_temp->cls = &TOK_EQ;
+			p_tokeniser->buf++;
+		} else {
+			p_temp->cls = &TOK_ASSIGN;
+		}
+	} else if (c == '>') {
+		if (nc == '=') {
+			p_temp->cls = &TOK_GEQ;
+			p_tokeniser->buf++;
+		} else {
+			p_temp->cls = &TOK_GT;
+		}
+	} else if (c == '<') {
+		if (nc == '=') {
+			p_temp->cls = &TOK_LEQ;
+			p_tokeniser->buf++;
+		} else {
+			p_temp->cls = &TOK_LT;
+		}
 	} else if (c == '[') { p_temp->cls = &TOK_LSQBR;
 	} else if (c == ']') { p_temp->cls = &TOK_RSQBR;
 	} else if (c == '{') { p_temp->cls = &TOK_LBRACE;
@@ -1295,7 +1332,11 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 	}
 
 	/* Ops */
-	if (p_src->cls == &AST_CLS_ADD || p_src->cls == &AST_CLS_SUB || p_src->cls == &AST_CLS_MUL || p_src->cls == &AST_CLS_MOD || p_src->cls == &AST_CLS_BITOR || p_src->cls == &AST_CLS_BITAND || p_src->cls == &AST_CLS_LOGAND || p_src->cls == &AST_CLS_LOGOR) {
+	if  (p_src->cls == &AST_CLS_ADD || p_src->cls == &AST_CLS_SUB || p_src->cls == &AST_CLS_MUL || p_src->cls == &AST_CLS_MOD
+	    || p_src->cls == &AST_CLS_BITOR || p_src->cls == &AST_CLS_BITAND
+	    || p_src->cls == &AST_CLS_LOGAND || p_src->cls == &AST_CLS_LOGOR
+	    || p_src->cls == &AST_CLS_EQ || p_src->cls == &AST_CLS_NEQ || p_src->cls == &AST_CLS_GT || p_src->cls == &AST_CLS_GEQ || p_src->cls == &AST_CLS_LEQ || p_src->cls == &AST_CLS_LT
+	    ) {
 		const struct ast_node *p_lhs;
 		const struct ast_node *p_rhs;
 		struct ast_node *p_ret;
@@ -1331,6 +1372,16 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 			return p_ret;
 		}
 
+		if ((p_src->cls == &AST_CLS_EQ || p_src->cls == &AST_CLS_NEQ) && (p_lhs->cls == &AST_CLS_LITERAL_BOOL || p_rhs->cls == &AST_CLS_LITERAL_BOOL)) {
+			if (p_lhs->cls != &AST_CLS_LITERAL_BOOL)
+				return ejson_location_error_null(p_error_handler, &p_src->doc_pos, "lhs must be boolean if rhs is\n");
+			if (p_rhs->cls != &AST_CLS_LITERAL_BOOL)
+				return ejson_location_error_null(p_error_handler, &p_src->doc_pos, "rhs must be boolean if lhs is\n");
+			p_ret->cls = &AST_CLS_LITERAL_BOOL;
+			p_ret->d.i = (p_src->cls == &AST_CLS_EQ) ? (!p_lhs->d.i == !p_rhs->d.i) : (p_lhs->d.i != p_rhs->d.i);
+			return p_ret;
+		}
+
 		/* Promote types */
 		if (p_lhs->cls == &AST_CLS_LITERAL_FLOAT || p_rhs->cls == &AST_CLS_LITERAL_FLOAT) {
 			double lhs, rhs;
@@ -1351,16 +1402,36 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 
 			linear_allocator_restore(p_alloc, save);
 
-			p_ret->cls = &AST_CLS_LITERAL_FLOAT;
-
 			if (p_src->cls == &AST_CLS_ADD) {
+				p_ret->cls = &AST_CLS_LITERAL_FLOAT;
 				p_ret->d.f = lhs + rhs;
 			} else if (p_src->cls == &AST_CLS_SUB) {
+				p_ret->cls = &AST_CLS_LITERAL_FLOAT;
 				p_ret->d.f = lhs - rhs;
 			} else if (p_src->cls == &AST_CLS_MUL) {
+				p_ret->cls = &AST_CLS_LITERAL_FLOAT;
 				p_ret->d.f = lhs * rhs;
 			} else if (p_src->cls == &AST_CLS_MOD) {
+				p_ret->cls = &AST_CLS_LITERAL_FLOAT;
 				p_ret->d.f = fmod(lhs, rhs);
+			} else if (p_src->cls == &AST_CLS_EQ) {
+				p_ret->cls = &AST_CLS_LITERAL_BOOL;
+				p_ret->d.i = lhs == rhs;
+			} else if (p_src->cls == &AST_CLS_NEQ) {
+				p_ret->cls = &AST_CLS_LITERAL_BOOL;
+				p_ret->d.i = lhs != rhs;
+			} else if (p_src->cls == &AST_CLS_LT) {
+				p_ret->cls = &AST_CLS_LITERAL_BOOL;
+				p_ret->d.i = lhs < rhs;
+			} else if (p_src->cls == &AST_CLS_LEQ) {
+				p_ret->cls = &AST_CLS_LITERAL_BOOL;
+				p_ret->d.i = lhs <= rhs;
+			} else if (p_src->cls == &AST_CLS_GEQ) {
+				p_ret->cls = &AST_CLS_LITERAL_BOOL;
+				p_ret->d.i = lhs >= rhs;
+			} else if (p_src->cls == &AST_CLS_GT) {
+				p_ret->cls = &AST_CLS_LITERAL_BOOL;
+				p_ret->d.i = lhs > rhs;
 			} else {
 				abort();
 			}
@@ -1376,17 +1447,37 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 
 			linear_allocator_restore(p_alloc, save);
 
-			p_ret->cls = &AST_CLS_LITERAL_INT;
-
 			if (p_src->cls == &AST_CLS_ADD) {
+				p_ret->cls = &AST_CLS_LITERAL_INT;
 				p_ret->d.i = lhs + rhs;
 			} else if (p_src->cls == &AST_CLS_SUB) {
+				p_ret->cls = &AST_CLS_LITERAL_INT;
 				p_ret->d.i = lhs - rhs;
 			} else if (p_src->cls == &AST_CLS_MUL) {
+				p_ret->cls = &AST_CLS_LITERAL_INT;
 				p_ret->d.i = lhs * rhs;
 			} else if (p_src->cls == &AST_CLS_MOD) {
+				p_ret->cls = &AST_CLS_LITERAL_INT;
 				lhs = lhs % rhs;
 				p_ret->d.i = lhs + ((lhs < 0) ? rhs : 0);
+			} else if (p_src->cls == &AST_CLS_EQ) {
+				p_ret->cls = &AST_CLS_LITERAL_BOOL;
+				p_ret->d.i = lhs == rhs;
+			} else if (p_src->cls == &AST_CLS_NEQ) {
+				p_ret->cls = &AST_CLS_LITERAL_BOOL;
+				p_ret->d.i = lhs != rhs;
+			} else if (p_src->cls == &AST_CLS_LT) {
+				p_ret->cls = &AST_CLS_LITERAL_BOOL;
+				p_ret->d.i = lhs < rhs;
+			} else if (p_src->cls == &AST_CLS_LEQ) {
+				p_ret->cls = &AST_CLS_LITERAL_BOOL;
+				p_ret->d.i = lhs <= rhs;
+			} else if (p_src->cls == &AST_CLS_GEQ) {
+				p_ret->cls = &AST_CLS_LITERAL_BOOL;
+				p_ret->d.i = lhs >= rhs;
+			} else if (p_src->cls == &AST_CLS_GT) {
+				p_ret->cls = &AST_CLS_LITERAL_BOOL;
+				p_ret->d.i = lhs > rhs;
 			} else {
 				abort();
 			}
@@ -1544,7 +1635,7 @@ int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace,
 			return ejson_error(p_error_handler, "cannot redefine variable '%s'\n", p_token->t.strident.str);
 		if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
 			return 1;
-		if (p_token->cls != &TOK_EQ)
+		if (p_token->cls != &TOK_ASSIGN)
 			return ejson_location_error(p_error_handler, &(p_token->posinfo), "expected '='\n");
 		if ((p_obj = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return ejson_error(p_error_handler, "expected an expression\n");
@@ -1762,6 +1853,33 @@ int main(int argc, char *argv[]) {
 		("[1,-2,3.4,-4.5,5.6e2,-7.8e-2]"
 		,"[1,-2,3.4,-4.5,5.6e2,-7.8e-2]"
 		,"numeric objects in a list"
+		);
+
+	/* comparison operators */
+	run_test
+		("3+1>=1+4"
+		,"false"
+		,"comparison expression"
+		);
+	run_test
+		("3+2<=1+4"
+		,"true"
+		,"comparison expression"
+		);
+	run_test
+		("map func[x] x <= 2 range [5]"
+		,"[true, true, true, false, false]"
+		,"map of comparison result"
+		);
+	run_test
+		("true==true"
+		,"true"
+		,"comparison expression"
+		);
+	run_test
+		("true==false"
+		,"false"
+		,"comparison expression"
 		);
 
 	/* range tests */
