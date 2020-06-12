@@ -90,7 +90,7 @@ struct ast_node {
 		struct {
 			const struct ast_node  *p_lhs;
 			const struct ast_node  *p_rhs;
-		} binop; /* AST_CLS_STRCAT, AST_CLS_NEG*, AST_CLS_ADD*, AST_CLS_SUB*, AST_CLS_MUL*, AST_CLS_DIV*, AST_CLS_MOD* */
+		} binop; /* AST_CLS_NEG*, AST_CLS_ADD*, AST_CLS_SUB*, AST_CLS_MUL*, AST_CLS_DIV*, AST_CLS_MOD* */
 		struct {
 			const struct ast_node **elements;
 			uint_fast32_t           nb_elements;
@@ -258,6 +258,8 @@ DEF_AST_CLS(AST_CLS_LITERAL_BOOL,    NULL, debug_print_bool);
 DEF_AST_CLS(AST_CLS_LITERAL_LIST,    NULL, debug_print_list);
 DEF_AST_CLS(AST_CLS_LITERAL_DICT,    NULL, debug_print_dict);
 DEF_AST_CLS(AST_CLS_NEG,             NULL, debug_print_unop);
+DEF_AST_CLS(AST_CLS_BITAND,          NULL, debug_print_binop);
+DEF_AST_CLS(AST_CLS_BITOR,           NULL, debug_print_binop);
 DEF_AST_CLS(AST_CLS_ADD,             NULL, debug_print_binop);
 DEF_AST_CLS(AST_CLS_SUB,             NULL, debug_print_binop);
 DEF_AST_CLS(AST_CLS_MUL,             NULL, debug_print_binop);
@@ -281,12 +283,14 @@ TOK_DECL(TOK_INT,        -1, 0, NULL); /* 13123 */
 TOK_DECL(TOK_FLOAT,      -1, 0, NULL); /* 13123.0 | .123 */
 
 /* Binary operators */
-TOK_DECL(TOK_ADD,         1, 0, &AST_CLS_ADD); /* + */
-TOK_DECL(TOK_SUB,         1, 0, &AST_CLS_SUB); /* - */
-TOK_DECL(TOK_MUL,         2, 0, &AST_CLS_MUL); /* * */
-TOK_DECL(TOK_DIV,         2, 0, &AST_CLS_DIV); /* / */
-TOK_DECL(TOK_MOD,         2, 0, &AST_CLS_MOD); /* % */
-TOK_DECL(TOK_EXP,         3, 1, &AST_CLS_EXP); /* ^ */
+TOK_DECL(TOK_BITOR,       1, 0, &AST_CLS_BITOR); /* | */
+TOK_DECL(TOK_BITAND,      2, 0, &AST_CLS_BITAND); /* & */
+TOK_DECL(TOK_ADD,         3, 0, &AST_CLS_ADD); /* + */
+TOK_DECL(TOK_SUB,         3, 0, &AST_CLS_SUB); /* - */
+TOK_DECL(TOK_MUL,         4, 0, &AST_CLS_MUL); /* * */
+TOK_DECL(TOK_DIV,         4, 0, &AST_CLS_DIV); /* / */
+TOK_DECL(TOK_MOD,         4, 0, &AST_CLS_MOD); /* % */
+TOK_DECL(TOK_EXP,         5, 1, &AST_CLS_EXP); /* ^ */
 
 /* String */
 TOK_DECL(TOK_STRING,     -1, 0, NULL); /* "afasfasf" */
@@ -543,6 +547,8 @@ const struct token *tok_read(struct tokeniser *p_tokeniser, const struct ejson_e
 	} else if (c == '^') { p_temp->cls = &TOK_EXP;
 	} else if (c == '-') { p_temp->cls = &TOK_SUB;
 	} else if (c == '+') { p_temp->cls = &TOK_ADD;
+	} else if (c == '|') { p_temp->cls = &TOK_BITOR;
+	} else if (c == '&') { p_temp->cls = &TOK_BITAND;
 	} else {
 		return ejson_location_error_null(p_error_handler, &(p_temp->posinfo), "invalid token\n");
 	}
@@ -1283,7 +1289,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 	}
 
 	/* Ops */
-	if (p_src->cls == &AST_CLS_ADD || p_src->cls == &AST_CLS_SUB || p_src->cls == &AST_CLS_MUL || p_src->cls == &AST_CLS_MOD) {
+	if (p_src->cls == &AST_CLS_ADD || p_src->cls == &AST_CLS_SUB || p_src->cls == &AST_CLS_MUL || p_src->cls == &AST_CLS_MOD || p_src->cls == &AST_CLS_BITOR || p_src->cls == &AST_CLS_BITAND) {
 		const struct ast_node *p_lhs;
 		const struct ast_node *p_rhs;
 		struct ast_node *p_ret;
@@ -1348,6 +1354,10 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 
 			if (p_src->cls == &AST_CLS_ADD) {
 				p_ret->d.i = lhs + rhs;
+			} else if (p_src->cls == &AST_CLS_BITAND) {
+				p_ret->d.i = lhs & rhs;
+			} else if (p_src->cls == &AST_CLS_BITOR) {
+				p_ret->d.i = lhs | rhs;
 			} else if (p_src->cls == &AST_CLS_SUB) {
 				p_ret->d.i = lhs - rhs;
 			} else if (p_src->cls == &AST_CLS_MUL) {
