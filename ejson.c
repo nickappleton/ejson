@@ -260,6 +260,8 @@ DEF_AST_CLS(AST_CLS_LITERAL_DICT,    NULL, debug_print_dict);
 DEF_AST_CLS(AST_CLS_NEG,             NULL, debug_print_unop);
 DEF_AST_CLS(AST_CLS_BITAND,          NULL, debug_print_binop);
 DEF_AST_CLS(AST_CLS_BITOR,           NULL, debug_print_binop);
+DEF_AST_CLS(AST_CLS_LOGAND,          NULL, debug_print_binop);
+DEF_AST_CLS(AST_CLS_LOGOR,           NULL, debug_print_binop);
 DEF_AST_CLS(AST_CLS_ADD,             NULL, debug_print_binop);
 DEF_AST_CLS(AST_CLS_SUB,             NULL, debug_print_binop);
 DEF_AST_CLS(AST_CLS_MUL,             NULL, debug_print_binop);
@@ -283,14 +285,16 @@ TOK_DECL(TOK_INT,        -1, 0, NULL); /* 13123 */
 TOK_DECL(TOK_FLOAT,      -1, 0, NULL); /* 13123.0 | .123 */
 
 /* Binary operators */
-TOK_DECL(TOK_BITOR,       1, 0, &AST_CLS_BITOR); /* | */
-TOK_DECL(TOK_BITAND,      2, 0, &AST_CLS_BITAND); /* & */
-TOK_DECL(TOK_ADD,         3, 0, &AST_CLS_ADD); /* + */
-TOK_DECL(TOK_SUB,         3, 0, &AST_CLS_SUB); /* - */
-TOK_DECL(TOK_MUL,         4, 0, &AST_CLS_MUL); /* * */
-TOK_DECL(TOK_DIV,         4, 0, &AST_CLS_DIV); /* / */
-TOK_DECL(TOK_MOD,         4, 0, &AST_CLS_MOD); /* % */
-TOK_DECL(TOK_EXP,         5, 1, &AST_CLS_EXP); /* ^ */
+TOK_DECL(TOK_LOGOR,       1, 0, &AST_CLS_LOGOR);  /* or */
+TOK_DECL(TOK_LOGAND,      2, 0, &AST_CLS_LOGAND); /* and */
+TOK_DECL(TOK_BITOR,       3, 0, &AST_CLS_BITOR);  /* | */
+TOK_DECL(TOK_BITAND,      4, 0, &AST_CLS_BITAND); /* & */
+TOK_DECL(TOK_ADD,         5, 0, &AST_CLS_ADD);    /* + */
+TOK_DECL(TOK_SUB,         5, 0, &AST_CLS_SUB);    /* - */
+TOK_DECL(TOK_MUL,         6, 0, &AST_CLS_MUL);    /* * */
+TOK_DECL(TOK_DIV,         6, 0, &AST_CLS_DIV);    /* / */
+TOK_DECL(TOK_MOD,         6, 0, &AST_CLS_MOD);    /* % */
+TOK_DECL(TOK_EXP,         7, 1, &AST_CLS_EXP);    /* ^ */
 
 /* String */
 TOK_DECL(TOK_STRING,     -1, 0, NULL); /* "afasfasf" */
@@ -529,6 +533,8 @@ const struct token *tok_read(struct tokeniser *p_tokeniser, const struct ejson_e
 		} else if (!strcmp(p_temp->t.strident.str, "listval")) { p_temp->cls = &TOK_LISTVAL;
 		} else if (!strcmp(p_temp->t.strident.str, "map")) { p_temp->cls = &TOK_MAP;
 		} else if (!strcmp(p_temp->t.strident.str, "format")) { p_temp->cls = &TOK_FORMAT;
+		} else if (!strcmp(p_temp->t.strident.str, "and")) { p_temp->cls = &TOK_LOGAND;
+		} else if (!strcmp(p_temp->t.strident.str, "or")) { p_temp->cls = &TOK_LOGOR;
 		} else { p_temp->cls = &TOK_IDENTIFIER; }
 
 	} else if (c == '=') { p_temp->cls = &TOK_EQ;
@@ -1289,7 +1295,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 	}
 
 	/* Ops */
-	if (p_src->cls == &AST_CLS_ADD || p_src->cls == &AST_CLS_SUB || p_src->cls == &AST_CLS_MUL || p_src->cls == &AST_CLS_MOD || p_src->cls == &AST_CLS_BITOR || p_src->cls == &AST_CLS_BITAND) {
+	if (p_src->cls == &AST_CLS_ADD || p_src->cls == &AST_CLS_SUB || p_src->cls == &AST_CLS_MUL || p_src->cls == &AST_CLS_MOD || p_src->cls == &AST_CLS_BITOR || p_src->cls == &AST_CLS_BITAND || p_src->cls == &AST_CLS_LOGAND || p_src->cls == &AST_CLS_LOGOR) {
 		const struct ast_node *p_lhs;
 		const struct ast_node *p_rhs;
 		struct ast_node *p_ret;
@@ -1304,6 +1310,26 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 			return NULL;
 		if ((p_rhs = evaluate_ast(p_src->d.binop.p_rhs, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
 			return NULL;
+
+		if (p_src->cls == &AST_CLS_LOGAND || p_src->cls == &AST_CLS_LOGOR) {
+			if (p_lhs->cls != &AST_CLS_LITERAL_BOOL)
+				return ejson_location_error_null(p_error_handler, &p_src->doc_pos, "lhs of logical operator was not boolean\n");
+			if (p_rhs->cls != &AST_CLS_LITERAL_BOOL)
+				return ejson_location_error_null(p_error_handler, &p_src->doc_pos, "rhs of logical operator was not boolean\n");
+			p_ret->cls = &AST_CLS_LITERAL_BOOL;
+			p_ret->d.i = (p_src->cls == &AST_CLS_LOGAND) ? (p_lhs->d.i && p_rhs->d.i) : (p_lhs->d.i || p_rhs->d.i);
+			return p_ret;
+		}
+
+		if (p_src->cls == &AST_CLS_BITAND || p_src->cls == &AST_CLS_BITOR) {
+			if (p_lhs->cls != &AST_CLS_LITERAL_INT)
+				return ejson_location_error_null(p_error_handler, &p_src->doc_pos, "lhs of bitwise operator was not integer\n");
+			if (p_rhs->cls != &AST_CLS_LITERAL_INT)
+				return ejson_location_error_null(p_error_handler, &p_src->doc_pos, "rhs of bitwise operator was not integer\n");
+			p_ret->cls = &AST_CLS_LITERAL_INT;
+			p_ret->d.i = (p_src->cls == &AST_CLS_BITAND) ? (p_lhs->d.i & p_rhs->d.i) : (p_lhs->d.i | p_rhs->d.i);
+			return p_ret;
+		}
 
 		/* Promote types */
 		if (p_lhs->cls == &AST_CLS_LITERAL_FLOAT || p_rhs->cls == &AST_CLS_LITERAL_FLOAT) {
@@ -1354,10 +1380,6 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 
 			if (p_src->cls == &AST_CLS_ADD) {
 				p_ret->d.i = lhs + rhs;
-			} else if (p_src->cls == &AST_CLS_BITAND) {
-				p_ret->d.i = lhs & rhs;
-			} else if (p_src->cls == &AST_CLS_BITOR) {
-				p_ret->d.i = lhs | rhs;
 			} else if (p_src->cls == &AST_CLS_SUB) {
 				p_ret->d.i = lhs - rhs;
 			} else if (p_src->cls == &AST_CLS_MUL) {
