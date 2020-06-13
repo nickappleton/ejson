@@ -27,18 +27,19 @@ static void linear_allocator_restore(struct linear_allocator *p_alloc, size_t po
 }
 
 static void *linear_allocator_alloc_align(struct linear_allocator *p_alloc, size_t align, size_t sz) {
-	size_t tmp = p_alloc->pos + align;
-	size_t sp  = tmp - (tmp & align);
+	size_t tmp = p_alloc->pos + (align - 1);
+	size_t sp  = tmp - (tmp & (align - 1));
 	p_alloc->pos = sp + sz;
 	if (p_alloc->pos > ALLOC_SZ) {
 		fprintf(stderr, "OOM\n");
 		abort();
 	}
+	assert((sp & (align - 1)) == 0);
 	return &(p_alloc->buf[sp]);
 }
 
 static void *linear_allocator_alloc(struct linear_allocator *p_alloc, size_t sz) {
-	return linear_allocator_alloc_align(p_alloc, 8, sz);
+	return linear_allocator_alloc_align(p_alloc, 16, sz);
 }
 
 #endif /* LINEAR_ALLOCATOR */

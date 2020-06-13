@@ -630,7 +630,7 @@ void evaluation_context_free(struct evaluation_context *p_ctx) {
 const struct ast_node *expect_expression(struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser, const struct ejson_error_handler *p_error_handler);
 
 const struct ast_node *parse_primary(struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser, const struct ejson_error_handler *p_error_handler) {
-	const struct ast_node *p_temp_nodes[8192];
+	const struct ast_node *p_temp_nodes[128];
 	struct ast_node *p_ret = NULL;
 	const struct token *p_token;
 
@@ -683,7 +683,8 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 	} else if (p_token->cls == &TOK_STRING) {
 		size_t sl = strlen(p_token->t.strident.str);
 		char *p_strbuf;
-		p_strbuf            = linear_allocator_alloc(&(p_workspace->alloc), sl + 1);
+		if ((p_strbuf = linear_allocator_alloc(&(p_workspace->alloc), sl + 1)) == NULL)
+			return ejson_error_null(p_error_handler, "out of memory\n");
 		memcpy(p_strbuf, p_token->t.strident.str, sl + 1);
 		p_ret->cls          = &AST_CLS_LITERAL_STRING;
 		p_ret->d.str.hash   = 0;
@@ -842,8 +843,20 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		p_ret->cls        = &AST_CLS_CALL;
 		if ((p_ret->d.call.fn = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
+#if 0
+		p_ret->d.call.fn->cls->debug_print(p_ret->d.call.fn, stdout, 0);
+		printf("fn ok\n");
+#endif
 		if ((p_ret->d.call.p_args  = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
+#if 0
+		p_ret->d.call.p_args->cls->debug_print(p_ret->d.call.p_args, stdout, 0);
+		printf("args ok\n");
+		p_ret->d.call.fn->cls->debug_print(p_ret->d.call.fn, stdout, 0);
+		printf("fn ok\n");
+		p_ret->cls->debug_print(p_ret, stdout, 0);
+		printf("object ok\n");
+#endif
 	} else {
 		token_print(p_token);
 		abort();
@@ -995,6 +1008,9 @@ const struct ast_node *ast_list_generator_map(const struct ast_node *p_src, unsi
 
 const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct ast_node **pp_stackx, unsigned stack_sizex, struct linear_allocator *p_alloc, const struct ejson_error_handler *p_error_handler) {
 	/* Move through stack references. */
+	assert(p_src->cls != NULL);
+	assert(p_src->cls->p_name != NULL);
+
 	while (p_src->cls == &AST_CLS_STACKREF) {
 		assert(pp_stackx != NULL);
 		assert(p_src->d.i > 0 && p_src->d.i <= stack_sizex);
@@ -1002,6 +1018,9 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		assert(p_src != NULL);
 	}
 	
+	assert(p_src->cls != NULL);
+	assert(p_src->cls->p_name != NULL);
+
 	/* Shortcuts for fully simplified objects. */
 	if  (   p_src->cls == &AST_CLS_LITERAL_INT
 	    ||  p_src->cls == &AST_CLS_LITERAL_BOOL
@@ -1650,7 +1669,9 @@ int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace,
 		return 1;
 	if ((p_token = tok_peek(p_tokeniser)) != NULL)
 		return ejson_location_error(p_error_handler, &(p_token->posinfo), "expected no more tokens at end of document\n", p_token->cls->name);
-	//p_obj->cls->debug_print(p_obj, stdout, 0);
+#if 0
+	p_obj->cls->debug_print(p_obj, stdout, 0);
+#endif
 	if ((p_root = evaluate_ast(p_obj, NULL, 0, &(p_workspace->alloc), p_error_handler)) == NULL)
 		return 1;
 	if (to_jnode(p_node, p_root, &(p_workspace->alloc), p_error_handler))
