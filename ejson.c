@@ -784,8 +784,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 	} else if (p_token->cls == &TOK_FUNC) {
 		unsigned        nb_args = 0;
 		unsigned        i;
-		struct ast_node args[32];
-		uintptr_t       argnames[32];
+		uintptr_t       argnames[64];
 		if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
 		if (p_token->cls != &TOK_LSQBR)
@@ -798,6 +797,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 				const struct istring *k;
 				struct token_pos_info identpos;
 				void **node;
+				struct ast_node *p_arg;
 				identpos = p_token->posinfo;
 				if (p_token->cls != &TOK_IDENTIFIER)
 					return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "expected a parameter name literal but got a %s token\n", p_token->cls->name);
@@ -811,9 +811,11 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 				node = pdict_get(&(p_workspace->workspace), argnames[nb_args]);
 				if (node != NULL)
 					return ejson_location_error_null(p_error_handler, &identpos, "function parameter names may only appear once and must alias workspace variables\n");
-				args[nb_args].cls = &AST_CLS_STACKREF;
-				args[nb_args].d.i = p_workspace->stack_depth + nb_args + 1;
-				if (pdict_set(&(p_workspace->workspace), argnames[nb_args], &(args[nb_args])))
+				if ((p_arg = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
+					return ejson_error_null(p_error_handler, "out of memory\n");
+				p_arg->cls = &AST_CLS_STACKREF;
+				p_arg->d.i = p_workspace->stack_depth + nb_args + 1;
+				if (pdict_set(&(p_workspace->workspace), argnames[nb_args], p_arg))
 					return ejson_error_null(p_error_handler, "out of memory\n");
 				nb_args++;
 				if (p_token->cls == &TOK_RSQBR)
@@ -822,7 +824,6 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 					return NULL;
 			} while (1);
 		}
-
 
 		p_ret->cls                              = &AST_CLS_FUNCTION;
 		p_ret->d.fn.nb_args                     = nb_args;
@@ -1688,8 +1689,6 @@ int ejson_load(struct jnode *p_node, struct evaluation_context *p_workspace, con
 	return parse_document(p_node, p_workspace, &t, p_error_handler);
 
 }
-//int parse_document();
-
 
 #if EJSON_TEST
 
