@@ -735,7 +735,8 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		p_ret->cls             = &AST_CLS_LITERAL_DICT;
 		p_ret->d.ldict.nb_keys = nb_kvs;
 		if (nb_kvs) {
-			p_ret->d.ldict.elements = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node *) * nb_kvs * 2);
+			if ((p_ret->d.ldict.elements = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node *) * nb_kvs * 2)) == NULL)
+				return ejson_error_null(p_error_handler, "out of memory\n");
 			memcpy(p_ret->d.ldict.elements, p_temp_nodes, sizeof(struct ast_node *) * nb_kvs * 2);
 		} else {
 			p_ret->d.ldict.elements = NULL;
@@ -858,20 +859,8 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		p_ret->cls        = &AST_CLS_CALL;
 		if ((p_ret->d.call.fn = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
-#if 0
-		p_ret->d.call.fn->cls->debug_print(p_ret->d.call.fn, stdout, 0);
-		printf("fn ok\n");
-#endif
 		if ((p_ret->d.call.p_args  = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
-#if 0
-		p_ret->d.call.p_args->cls->debug_print(p_ret->d.call.p_args, stdout, 0);
-		printf("args ok\n");
-		p_ret->d.call.fn->cls->debug_print(p_ret->d.call.fn, stdout, 0);
-		printf("fn ok\n");
-		p_ret->cls->debug_print(p_ret, stdout, 0);
-		printf("object ok\n");
-#endif
 	} else {
 		token_print(p_token);
 		abort();
@@ -986,8 +975,7 @@ const struct ast_node *get_literal_element_fn(const struct ast_node *p_src, unsi
 	if (element >= p_src->d.lgen.nb_elements)
 		return (ejson_error(p_error_handler, "list index out of bounds\n"), NULL);
 	if ((p_src = evaluate_ast(p_src->d.lgen.d.literal.pp_values[element], p_src->d.lgen.pp_stack, p_src->d.lgen.stack_size, p_alloc, p_error_handler)) == NULL)
-		return (ejson_error(p_error_handler, "list index out of bounds\n"), NULL);
-
+		return NULL;
 	return p_src;
 }
 
@@ -1008,7 +996,7 @@ const struct ast_node *ast_list_generator_map(const struct ast_node *p_src, unsi
 
 	/* Evaluate argument and shove on stack */
 	if ((p_argument = p_list->d.lgen.get_element(p_list, element, p_alloc, p_error_handler)) == NULL)
-		return (ejson_error(p_error_handler, "could not get list item\n"), NULL);
+		return NULL;
 
 	assert(p_src->d.lgen.stack_size == p_function->d.fn.stack_depth_at_function_def || !p_function->d.fn.stack_depth_at_function_def);
 
@@ -1051,7 +1039,9 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 
 	/* Convert lists into list generators */
 	if  (p_src->cls == &AST_CLS_LITERAL_LIST) {
-		struct ast_node *p_ret            = linear_allocator_alloc(p_alloc, sizeof(struct ast_node));
+		struct ast_node *p_ret;
+		if ((p_ret = linear_allocator_alloc(p_alloc, sizeof(struct ast_node))) == NULL)
+			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->cls                        = &AST_CLS_LIST_GENERATOR;
 		p_ret->doc_pos                    = p_src->doc_pos;
 		p_ret->d.lgen.pp_stack            = pp_stackx;
@@ -1073,10 +1063,13 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		char *ob;
 		char c;
 
-		if ((p_args = evaluate_ast(p_src->d.builtin.p_args, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL || p_args->cls != &AST_CLS_LIST_GENERATOR || p_args->d.lgen.nb_elements < 1)
+		if ((p_args = evaluate_ast(p_src->d.builtin.p_args, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
+			return NULL;
+		if (p_args->cls != &AST_CLS_LIST_GENERATOR || p_args->d.lgen.nb_elements < 1)
 			return (ejson_error(p_error_handler, "format expects a list argument with at least a format string\n"), NULL);
-
-		if ((p_fmtstr = p_args->d.lgen.get_element(p_args, 0, p_alloc, p_error_handler)) == NULL || p_fmtstr->cls != &AST_CLS_LITERAL_STRING)
+		if ((p_fmtstr = p_args->d.lgen.get_element(p_args, 0, p_alloc, p_error_handler)) == NULL)
+			return NULL;
+		if (p_fmtstr->cls != &AST_CLS_LITERAL_STRING)
 			return (ejson_error(p_error_handler, "first argument of format must be a string\n"), NULL);
 		
 		cp = p_fmtstr->d.str.p_data;
@@ -1112,7 +1105,9 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 					const struct ast_node *p_argval;
 					if (argidx >= p_args->d.lgen.nb_elements)
 						return (ejson_error(p_error_handler, "not enough arguments given to format\n"), NULL);
-					if ((p_argval = p_args->d.lgen.get_element(p_args, argidx++, p_alloc, p_error_handler)) == NULL || p_argval->cls != &AST_CLS_LITERAL_INT)
+					if ((p_argval = p_args->d.lgen.get_element(p_args, argidx++, p_alloc, p_error_handler)) == NULL)
+						return NULL;
+					if (p_argval->cls != &AST_CLS_LITERAL_INT)
 						return (ejson_error(p_error_handler, "%%d expects an integer argument\n"), NULL);
 					fmtspec[specpos++] = 'l';
 					fmtspec[specpos++] = 'l';
@@ -1139,7 +1134,8 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		}
 		strbuf[i] = '\0';
 
-		p_ret = linear_allocator_alloc(p_alloc, sizeof(struct ast_node) + i + 1);
+		if ((p_ret = linear_allocator_alloc(p_alloc, sizeof(struct ast_node) + i + 1)) == NULL)
+			return NULL;
 		ob = (char *)(p_ret + 1);
 		memcpy(ob, strbuf, i+1);
 
@@ -1151,8 +1147,8 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 	}
 
 	if  (p_src->cls == &AST_CLS_LITERAL_DICT) {
+		struct ast_node *p_ret;
 		unsigned i;
-
 		struct dictnode *p_root = NULL;
 
 		/* Build the dictionary */
@@ -1189,7 +1185,8 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 			*pp_ipos = p_iter;
 		}
 
-		struct ast_node *p_ret = linear_allocator_alloc(p_alloc, sizeof(struct ast_node));
+		if ((p_ret = linear_allocator_alloc(p_alloc, sizeof(struct ast_node))) == NULL)
+			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->cls                = &AST_CLS_READY_DICT;
 		p_ret->doc_pos            = p_src->doc_pos;
 		p_ret->d.rdict.pp_stack   = pp_stackx;
@@ -1215,9 +1212,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 			return NULL;
 		if (p_list->cls != &AST_CLS_LIST_GENERATOR)
 			return ejson_error_null(p_error_handler, "the list expression for listval did not evaluate to a list\n");
-		if ((p_ret = p_list->d.lgen.get_element(p_list, idx, p_alloc, p_error_handler)) == NULL)
-			return ejson_error_null(p_error_handler, "failed to evaluate list element %d because\n", idx);
-		return p_ret;
+		return p_list->d.lgen.get_element(p_list, idx, p_alloc, p_error_handler);
 	}
 
 	/* Function call */
@@ -1254,10 +1249,13 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 
 	/* Unary negation */
 	if (p_src->cls == &AST_CLS_NEG) {
-		struct ast_node *p_tmp2 = linear_allocator_alloc(p_alloc, sizeof(struct ast_node));
-		size_t save             = linear_allocator_save(p_alloc);
 		const struct ast_node *p_result;
+		struct ast_node       *p_tmp2;
+		size_t                 save;
 
+		if ((p_tmp2 = linear_allocator_alloc(p_alloc, sizeof(struct ast_node))) == NULL)
+			return ejson_error_null(p_error_handler, "out of memory\n");
+		save = linear_allocator_save(p_alloc);
 		if ((p_result = evaluate_ast(p_src->d.binop.p_lhs, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
 			return NULL;
 
@@ -1280,11 +1278,14 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 
 	/* Convert range into an accessor object */
 	if (p_src->cls == &AST_CLS_RANGE) {
-		struct ast_node       *p_result = linear_allocator_alloc(p_alloc, sizeof(struct ast_node));
-		size_t                    save     = linear_allocator_save(p_alloc);
-		struct lrange             lrange;
+		struct ast_node       *p_result;
+		size_t                 save;
+		struct lrange          lrange;
 		const struct ast_node *p_args;
 
+		if ((p_result = linear_allocator_alloc(p_alloc, sizeof(struct ast_node))) == NULL)
+			return ejson_error_null(p_error_handler, "out of memory\n");
+		save     = linear_allocator_save(p_alloc);
 		if ((p_args = evaluate_ast(p_src->d.builtin.p_args, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
 			return NULL;
 		if (p_args->cls != &AST_CLS_LIST_GENERATOR)
@@ -1295,7 +1296,9 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		if (p_args->d.lgen.nb_elements == 1) {
 			const struct ast_node *p_first;
 
-			if ((p_first = p_args->d.lgen.get_element(p_args, 0, p_alloc, p_error_handler)) == NULL || p_first->cls != &AST_CLS_LITERAL_INT)
+			if ((p_first = p_args->d.lgen.get_element(p_args, 0, p_alloc, p_error_handler)) == NULL)
+				return NULL;
+			if (p_first->cls != &AST_CLS_LITERAL_INT)
 				return (ejson_error(p_error_handler, "single argument range expects an integer number of items\n"), NULL);
 
 			lrange.first     = 0;
@@ -1304,9 +1307,11 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		} else if (p_args->d.lgen.nb_elements == 2) {
 			const struct ast_node *p_first, *p_last;
 
-			if  (   (p_first = p_args->d.lgen.get_element(p_args, 0, p_alloc, p_error_handler)) == NULL || p_first->cls != &AST_CLS_LITERAL_INT
-			    ||  (p_last = p_args->d.lgen.get_element(p_args, 1, p_alloc, p_error_handler)) == NULL || p_last->cls != &AST_CLS_LITERAL_INT
+			if  (   (p_first = p_args->d.lgen.get_element(p_args, 0, p_alloc, p_error_handler)) == NULL
+			    ||  (p_last = p_args->d.lgen.get_element(p_args, 1, p_alloc, p_error_handler)) == NULL
 			    )
+				return NULL;
+			if (p_first->cls != &AST_CLS_LITERAL_INT || p_last->cls != &AST_CLS_LITERAL_INT)
 				return (ejson_error(p_error_handler, "dual argument range expects an integer first and last index\n"), NULL);
 
 			lrange.first     = p_first->d.i;
@@ -1315,9 +1320,12 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		} else {
 			const struct ast_node *p_first, *p_step, *p_last;
 
-			if  (   (p_first = p_args->d.lgen.get_element(p_args, 0, p_alloc, p_error_handler)) == NULL || p_first->cls != &AST_CLS_LITERAL_INT
-			    ||  (p_step = p_args->d.lgen.get_element(p_args, 1, p_alloc, p_error_handler)) == NULL || p_step->cls != &AST_CLS_LITERAL_INT
-			    ||  (p_last = p_args->d.lgen.get_element(p_args, 2, p_alloc, p_error_handler)) == NULL || p_last->cls != &AST_CLS_LITERAL_INT
+			if  (   (p_first = p_args->d.lgen.get_element(p_args, 0, p_alloc, p_error_handler)) == NULL
+			    ||  (p_step = p_args->d.lgen.get_element(p_args, 1, p_alloc, p_error_handler)) == NULL
+			    ||  (p_last = p_args->d.lgen.get_element(p_args, 2, p_alloc, p_error_handler)) == NULL
+			    )
+				return NULL;
+			if  (   p_first->cls != &AST_CLS_LITERAL_INT || p_step->cls != &AST_CLS_LITERAL_INT ||  p_last->cls != &AST_CLS_LITERAL_INT
 			    ||  p_step->d.i == 0
 			    ||  (p_step->d.i > 0 && (p_first->d.i > p_last->d.i))
 			    ||  (p_step->d.i < 0 && (p_first->d.i < p_last->d.i))
@@ -1376,7 +1384,8 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		struct ast_node *p_ret;
 		size_t save;
 		
-		p_ret          = linear_allocator_alloc(p_alloc, sizeof(struct ast_node));
+		if ((p_ret = linear_allocator_alloc(p_alloc, sizeof(struct ast_node))) == NULL)
+			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->doc_pos = p_src->doc_pos;
 
 		save        = linear_allocator_save(p_alloc);
@@ -1573,10 +1582,9 @@ enumerate_dict_keys2
 	save = linear_allocator_save(p_alloc);
 
 	if ((p_eval = evaluate_ast(p_node->data2, pp_stack, stack_size, p_alloc, p_error_handler)) == NULL)
-		return ejson_error(p_error_handler, "could not get dictionary value\n");
-
+		return -1;
 	if (to_jnode(&tmp, p_eval, p_alloc, p_error_handler))
-		return ejson_error(p_error_handler, "could not convert dictionary data\n");
+		return -1;
 
 	ret = p_fn(&tmp, (const char *)(p_node + 1), p_userctx);
 
