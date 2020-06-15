@@ -470,55 +470,69 @@ const struct token *tok_read(struct tokeniser *p_tokeniser, const struct ejson_e
 	    ||  (c >= '0' && c <= '9')
 	    ) {
 		unsigned long long ull = 0;
+		int ishex;
 		p_temp->cls = &TOK_INT;
-		while (c >= '0' && c <= '9') {
-			ull *= 10;
-			ull += c - '0';
-			c    = *(p_tokeniser->buf++);
-		}
-		if (c == '.') {
-			double frac = 0.1;
-			p_temp->cls    = &TOK_FLOAT;
-			p_temp->t.tflt = ull;
-			c = *(p_tokeniser->buf++);
-			if (c < '0' || c > '9')
-				return ejson_location_error_null(p_error_handler, &(p_temp->posinfo), "invalid json numeric\n");
-			while (c >= '0' && c <= '9') {
-				p_temp->t.tflt += (c - '0') * frac;
-				frac *= 0.1;
-				c = *(p_tokeniser->buf++);
-			}
-		}
-		if (c == 'e' || c == 'E') {
-			int eneg = 0;
-			int eval;
-			c = *(p_tokeniser->buf++);
-			if (c == '-') {
-				eneg = 1;
-				c = *(p_tokeniser->buf++);
-			} else if (c == '+') {
-				c = *(p_tokeniser->buf++);
-			}
-			if (c < '0' || c > '9')
-				return ejson_location_error_null(p_error_handler, &(p_temp->posinfo), "invalid json numeric\n");
-			eval = c - '0';
-			c = *(p_tokeniser->buf++);
-			while (c >= '0' && c <= '9') {
-				eval = eval * 10 + (c - '0');
-				c = *(p_tokeniser->buf++);
-			}
-			eval = (eneg) ? -eval : eval;
-			if (p_temp->cls == &TOK_FLOAT) {
-				p_temp->t.tflt *= pow(10.0, eval);
-			} else {
-				p_temp->cls = &TOK_FLOAT;
-				p_temp->t.tflt = ull * pow(10.0, eval);
-			}
-		}
-		if (p_temp->cls == &TOK_INT) {
+		ishex = c == '0' && p_tokeniser->buf[0] == 'x';
+		if (ishex) {
+			unsigned uu;
+			++p_tokeniser->buf;
+			if (expect_hex_digit(&(p_tokeniser->buf), &uu))
+				return ejson_location_error_null(p_error_handler, &(p_temp->posinfo), "invalid extended json numeric\n");
+			do {
+				ull *= 16;
+				ull += uu;
+			} while (!expect_hex_digit(&(p_tokeniser->buf), &uu));
 			p_temp->t.tint = ull;
+		} else {
+			while (c >= '0' && c <= '9') {
+				ull *= 10;
+				ull += c - '0';
+				c    = *(p_tokeniser->buf++);
+			}
+			if (c == '.') {
+				double frac = 0.1;
+				p_temp->cls    = &TOK_FLOAT;
+				p_temp->t.tflt = ull;
+				c = *(p_tokeniser->buf++);
+				if (c < '0' || c > '9')
+					return ejson_location_error_null(p_error_handler, &(p_temp->posinfo), "invalid json numeric\n");
+				while (c >= '0' && c <= '9') {
+					p_temp->t.tflt += (c - '0') * frac;
+					frac *= 0.1;
+					c = *(p_tokeniser->buf++);
+				}
+			}
+			if (c == 'e' || c == 'E') {
+				int eneg = 0;
+				int eval;
+				c = *(p_tokeniser->buf++);
+				if (c == '-') {
+					eneg = 1;
+					c = *(p_tokeniser->buf++);
+				} else if (c == '+') {
+					c = *(p_tokeniser->buf++);
+				}
+				if (c < '0' || c > '9')
+					return ejson_location_error_null(p_error_handler, &(p_temp->posinfo), "invalid json numeric\n");
+				eval = c - '0';
+				c = *(p_tokeniser->buf++);
+				while (c >= '0' && c <= '9') {
+					eval = eval * 10 + (c - '0');
+					c = *(p_tokeniser->buf++);
+				}
+				eval = (eneg) ? -eval : eval;
+				if (p_temp->cls == &TOK_FLOAT) {
+					p_temp->t.tflt *= pow(10.0, eval);
+				} else {
+					p_temp->cls = &TOK_FLOAT;
+					p_temp->t.tflt = ull * pow(10.0, eval);
+				}
+			}
+			if (p_temp->cls == &TOK_INT) {
+				p_temp->t.tint = ull;
+			}
+			p_tokeniser->buf--;
 		}
-		p_tokeniser->buf--;
 	} else if
 	    (   (c >= 'a' && c <= 'z')
 	    ||  (c >= 'A' && c <= 'Z')
@@ -1873,6 +1887,28 @@ int main(int argc, char *argv[]) {
 		("[1,-2,3.4,-4.5,5.6e2,-7.8e-2]"
 		,"[1,-2,3.4,-4.5,5.6e2,-7.8e-2]"
 		,"numeric objects in a list"
+		);
+
+	/* extended hexadecimal numerics */
+	run_test
+		("0x01"
+		,"1"
+		,"hex int objects"
+		);
+	run_test
+		("0x20"
+		,"32"
+		,"hex int objects"
+		);
+	run_test
+		("0x0a"
+		,"10"
+		,"hex int objects"
+		);
+	run_test
+		("0x4F"
+		,"79"
+		,"hex int objects"
 		);
 
 	/* comparison operators */
