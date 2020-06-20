@@ -120,9 +120,9 @@ struct ast_node {
 			const struct ast_node  *p_input_list;
 		} map;
 		struct {
-			const struct ast_node  *p_list;
-			const struct ast_node  *p_index;
-		} listval;
+			const struct ast_node  *p_data;
+			const struct ast_node  *p_key;
+		} access;
 
 		struct {
 			const struct ast_node **pp_stack;
@@ -175,6 +175,21 @@ static size_t hashfnv(const char *p_str, uint_fast32_t *p_hash) {
 		hash = ((hash ^ c) * 16777619) & 0xFFFFFFFFu;
 	*p_hash = hash;
 	return length;
+}
+
+struct dictnode *rdict_find(struct dictnode *p_root, const char *p_string) {
+	uint_fast32_t hash, ukey;
+	size_t len;
+	const struct ast_node *p_key;
+	len  = hashfnv(p_string, &hash);
+	ukey = hash;
+	while (p_root != NULL) {
+		if (p_root->key == hash && !strcmp((const char *)(p_root + 1), p_string))
+			return p_root;
+		p_root = p_root->p_children[ukey & DICTNODE_MASK];
+		ukey >>= DICTNODE_BITS;
+	}
+	return NULL;
 }
 
 #define TOK_DECL(name_, precedence_, right_associative_, binop_ast_cls_) \
@@ -231,10 +246,10 @@ static void debug_print_call(const struct ast_node *p_node, FILE *p_f, unsigned 
 	p_node->d.call.fn->cls->debug_print(p_node->d.call.fn, p_f, depth + 1);
 	p_node->d.call.p_args->cls->debug_print(p_node->d.call.p_args, p_f, depth + 1);
 }
-static void debug_print_listval(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
+static void debug_print_access(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
 	fprintf(p_f, "%*s%s\n", depth, "", p_node->cls->p_name);
-	p_node->d.listval.p_list->cls->debug_print(p_node->d.listval.p_list, p_f, depth + 1);
-	p_node->d.listval.p_index->cls->debug_print(p_node->d.listval.p_index, p_f, depth + 1);
+	p_node->d.access.p_data->cls->debug_print(p_node->d.access.p_data, p_f, depth + 1);
+	p_node->d.access.p_key->cls->debug_print(p_node->d.access.p_key, p_f, depth + 1);
 }
 static void debug_print_map(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
 	fprintf(p_f, "%*s%s\n", depth, "", p_node->cls->p_name);
@@ -277,7 +292,7 @@ DEF_AST_CLS(AST_CLS_GT,              NULL, debug_print_binop);
 DEF_AST_CLS(AST_CLS_RANGE,           NULL, debug_print_builtin);
 DEF_AST_CLS(AST_CLS_FUNCTION,        NULL, debug_print_function);
 DEF_AST_CLS(AST_CLS_CALL,            NULL, debug_print_call);
-DEF_AST_CLS(AST_CLS_LISTVAL,         NULL, debug_print_listval);
+DEF_AST_CLS(AST_CLS_ACCESS,          NULL, debug_print_access);
 DEF_AST_CLS(AST_CLS_MAP,             NULL, debug_print_map);
 DEF_AST_CLS(AST_CLS_FORMAT,          NULL, debug_print_builtin);
 DEF_AST_CLS(AST_CLS_STACKREF,        NULL, debug_print_int_like);
@@ -320,7 +335,7 @@ TOK_DECL(TOK_RANGE,      -1, 0, NULL); /* range */
 TOK_DECL(TOK_FUNC,       -1, 0, NULL); /* func */
 TOK_DECL(TOK_CALL,       -1, 0, NULL); /* call */
 TOK_DECL(TOK_DEFINE,     -1, 0, NULL); /* define */
-TOK_DECL(TOK_LISTVAL,    -1, 0, NULL); /* listval */
+TOK_DECL(TOK_ACCESS,     -1, 0, NULL); /* access */
 TOK_DECL(TOK_MAP,        -1, 0, NULL); /* map */
 TOK_DECL(TOK_FORMAT,     -1, 0, NULL); /* format */
 TOK_DECL(TOK_IDENTIFIER, -1, 0, NULL); /* afasfasf - anything not a keyword */
@@ -558,7 +573,7 @@ const struct token *tok_read(struct tokeniser *p_tokeniser, const struct ejson_e
 		} else if (!strcmp(p_temp->t.strident.str, "call")) { p_temp->cls = &TOK_CALL;
 		} else if (!strcmp(p_temp->t.strident.str, "func")) { p_temp->cls = &TOK_FUNC;
 		} else if (!strcmp(p_temp->t.strident.str, "define")) { p_temp->cls = &TOK_DEFINE;
-		} else if (!strcmp(p_temp->t.strident.str, "listval")) { p_temp->cls = &TOK_LISTVAL;
+		} else if (!strcmp(p_temp->t.strident.str, "access")) { p_temp->cls = &TOK_ACCESS;
 		} else if (!strcmp(p_temp->t.strident.str, "map")) { p_temp->cls = &TOK_MAP;
 		} else if (!strcmp(p_temp->t.strident.str, "format")) { p_temp->cls = &TOK_FORMAT;
 		} else if (!strcmp(p_temp->t.strident.str, "and")) { p_temp->cls = &TOK_LOGAND;
@@ -676,11 +691,11 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		return ejson_error_null(p_error_handler, "out of memory\n");
 	p_ret->doc_pos = p_token->posinfo;
 
-	if (p_token->cls == &TOK_LISTVAL) {
-		p_ret->cls        = &AST_CLS_LISTVAL;
-		if ((p_ret->d.listval.p_list = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
+	if (p_token->cls == &TOK_ACCESS) {
+		p_ret->cls        = &AST_CLS_ACCESS;
+		if ((p_ret->d.access.p_data = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
-		if ((p_ret->d.listval.p_index = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
+		if ((p_ret->d.access.p_key = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
 	} else if (p_token->cls == &TOK_MAP) {
 		p_ret->cls        = &AST_CLS_MAP;
@@ -1196,23 +1211,37 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		return p_ret;
 	}
 
-	if (p_src->cls == &AST_CLS_LISTVAL) {
+	if (p_src->cls == &AST_CLS_ACCESS) {
 		const struct ast_node *p_list;
-		const struct ast_node *p_idx;
 		const struct ast_node *p_ret;
-		long long idx;
-		size_t save = linear_allocator_save(p_alloc);
-		if ((p_idx = evaluate_ast(p_src->d.listval.p_index, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
+		if ((p_list = evaluate_ast(p_src->d.access.p_data, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
 			return NULL;
-		if (p_idx->cls != &AST_CLS_LITERAL_INT)
-			return ejson_error_null(p_error_handler, "the index expression for listval did not evaluate to an integer\n");
-		idx = p_idx->d.i;
-		linear_allocator_restore(p_alloc, save);
-		if ((p_list = evaluate_ast(p_src->d.listval.p_list, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
-			return NULL;
-		if (p_list->cls != &AST_CLS_LIST_GENERATOR)
-			return ejson_error_null(p_error_handler, "the list expression for listval did not evaluate to a list\n");
-		return p_list->d.lgen.get_element(p_list, idx, p_alloc, p_error_handler);
+		if (p_list->cls == &AST_CLS_LIST_GENERATOR) {
+			const struct ast_node *p_idx;
+			long long idx;
+			size_t save = linear_allocator_save(p_alloc);
+			if ((p_idx = evaluate_ast(p_src->d.access.p_key, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
+				return NULL;
+			if (p_idx->cls != &AST_CLS_LITERAL_INT)
+				return ejson_location_error_null(p_error_handler, &(p_src->d.access.p_key->doc_pos), "the key expression for a list access did not evaluate to an integer\n");
+			idx = p_idx->d.i;
+			linear_allocator_restore(p_alloc, save);
+			return p_list->d.lgen.get_element(p_list, idx, p_alloc, p_error_handler);
+		}
+		
+		if (p_list->cls == &AST_CLS_READY_DICT) {
+			const struct ast_node *p_key;
+			struct dictnode *p_node;
+			if ((p_key = evaluate_ast(p_src->d.access.p_key, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
+				return NULL;
+			if (p_key->cls != &AST_CLS_LITERAL_STRING)
+				return ejson_location_error_null(p_error_handler, &(p_src->d.access.p_key->doc_pos), "the key expression for dict access did not evaluate to a string\n");
+			if ((p_node = rdict_find(p_list->d.rdict.p_root, p_key->d.str.p_data)) == NULL)
+				return ejson_location_error_null(p_error_handler, &(p_src->d.access.p_key->doc_pos), "key '%s' not in dict\n", p_key->d.str.p_data);
+			return evaluate_ast(p_node->data2, pp_stackx, stack_sizex, p_alloc, p_error_handler);
+		}
+
+		return ejson_error_null(p_error_handler, "the list expression for access did not evaluate to a list\n");
 	}
 
 	/* Function call */
@@ -1972,7 +2001,7 @@ int main(int argc, char *argv[]) {
 		,"[6,3,0,-3,-6,-9]"
 		,"range generator from-step-to 2"
 		);
-	
+
 	/* function tests */
 	run_test
 		("call func[] 1 []"
@@ -2049,21 +2078,31 @@ int main(int argc, char *argv[]) {
 		,"use a workspace variable as a function"
 		);
 
-	/* listval tests */
+	/* access tests */
 	run_test
-		("listval [1,2,3] 1"
+		("access [1,2,3] 1"
 		,"2"
-		,"extraction of a value from a literal list"
+		,"access of a value from a literal list"
 		);
 	run_test
-		("listval range[10] 4"
+		("access range[10] 4"
 		,"4"
-		,"extracting an element of a generated list"
+		,"access an element of a generated list"
 		);
 	run_test
-		("listval call func[x] [1, x, 2, 3] [50] 1"
+		("access call func[x] [1, x, 2, 3] [50] 1"
 		,"50"
-		,"extracting an element of the list returned by a function"
+		,"access an element of the list returned by a function"
+		);
+	run_test
+		("access {\"value1\": true, \"value2\": 399, \"value3\": false} \"value2\""
+		,"399"
+		,"access of dictionary item"
+		);
+	run_test
+		("access {\"value1\": true, \"value2\": 399, \"value3\": false} call func [x] format [\"value%d\", x] [3]"
+		,"false"
+		,"access of dictionary item where the key is generated using format"
 		);
 
 	/* map tests */
@@ -2093,7 +2132,7 @@ int main(int argc, char *argv[]) {
 		,"map operation basics"
 		);
 	run_test
-		("map func[x] listval [\"a\",\"b\",\"c\",\"d\",\"e\"] x%5 range[-2,1,8]"
+		("map func[x] access [\"a\",\"b\",\"c\",\"d\",\"e\"] x%5 range[-2,1,8]"
 		,"[\"d\",\"e\",\"a\",\"b\",\"c\",\"d\",\"e\",\"a\",\"b\",\"c\",\"d\"]"
 		,"map over a range basics"
 		);
@@ -2130,12 +2169,12 @@ int main(int argc, char *argv[]) {
 		,"test format with an integer and string argument"
 		);
 	run_test
-		("map func[x] format[\"%03d-%s.wav\", x, listval [\"c\", \"d\", \"e\"] x%3] range[36,40]"
+		("map func[x] format[\"%03d-%s.wav\", x, access [\"c\", \"d\", \"e\"] x%3] range[36,40]"
 		,"[\"036-c.wav\", \"037-d.wav\", \"038-e.wav\", \"039-c.wav\", \"040-d.wav\"]"
 		,"test using format to generate mapped strings"
 		);
 	run_test
-		("call listval [func[x] x+1, func[x] x+2, func[x] x+3] 1 [10]"
+		("call access [func[x] x+1, func[x] x+2, func[x] x+3] 1 [10]"
 		,"12"
 		,"test calling a function that is in a list of functions"
 		);
@@ -2144,7 +2183,7 @@ int main(int argc, char *argv[]) {
 	run_test
 		("define notes=[\"a\",\"b\",\"c\"];\n"
 		 "map func[x]\n"
-		 "  {\"name\": listval notes x % 3, \"id\": x} range[0,5]\n"
+		 "  {\"name\": access notes x % 3, \"id\": x} range[0,5]\n"
 		,"[{\"id\":0,\"name\":\"a\"}"
 		 ",{\"id\":1,\"name\":\"b\"}"
 		 ",{\"id\":2,\"name\":\"c\"}"
@@ -2199,26 +2238,26 @@ int main(int argc, char *argv[]) {
 		,"func arguments must not alias workspace variables"
 		);
 	
-	/* listval error tests */
+	/* access error tests */
 	run_test
-		("listval"
+		("access"
 		,NULL
-		,"listval no tokens for first expression"
+		,"access no tokens for first expression"
 		);
 	run_test
-		("listval [1"
+		("access [1"
 		,NULL
-		,"listval could not parse first expression"
+		,"access could not parse first expression"
 		);
 	run_test
-		("listval 1"
+		("access 1"
 		,NULL
-		,"listval no tokens for second expression"
+		,"access no tokens for second expression"
 		);
 	run_test
-		("listval 1 [1"
+		("access 1 [1"
 		,NULL
-		,"listval could not parse second expression"
+		,"access could not parse second expression"
 		);
 
 	/* map tests */
@@ -2241,6 +2280,21 @@ int main(int argc, char *argv[]) {
 		("map 1 [1"
 		,NULL
 		,"map could not parse second expression"
+		);
+	run_test
+		("access [1, 2, 3, 4, 5] \"hehre\""
+		,NULL
+		,"access of list item using a non-integer key"
+		);
+	run_test
+		("access {\"value1\": true, \"value2\": 399, \"value3\": false} 100"
+		,NULL
+		,"access of dictionary item using a non-string key"
+		);
+	run_test
+		("access {\"value1\": true, \"value2\": 399, \"value3\": false} \"hehre\""
+		,NULL
+		,"access of a missing dictionary item"
 		);
 
 	/* end of document test */
