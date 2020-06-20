@@ -1629,6 +1629,18 @@ static int enumerate_dict_keys(jdict_enumerate_fn *p_fn, void *p_ctx, struct lin
 	return 0;
 }
 
+static int jnode_get_dict_element(struct jnode *p_dest, void *p_ctx, struct linear_allocator *p_alloc, const char *p_key) {
+	struct execution_context *ec = p_ctx;
+	struct dictnode *dn = rdict_find(ec->p_object->d.rdict.p_root, p_key);
+	const struct ast_node *prval;
+	if (dn == NULL)
+		return 1; /* Not found */
+	prval = evaluate_ast(dn->data2, ec->p_object->d.rdict.pp_stack, ec->p_object->d.rdict.stack_size, p_alloc, ec->p_error_handler);
+	if (prval == NULL)
+		return -1; /* Error */
+	return to_jnode(p_dest, prval, p_alloc, ec->p_error_handler);
+}
+
 static int to_jnode(struct jnode *p_node, const struct ast_node *p_ast, struct linear_allocator *p_alloc, const struct ejson_error_handler *p_error_handler) {
 	struct execution_context *p_ec;
 
@@ -1671,7 +1683,7 @@ static int to_jnode(struct jnode *p_node, const struct ast_node *p_ast, struct l
 		p_node->cls               = JNODE_CLS_DICT;
 		p_node->d.dict.nb_keys    = p_ast->d.rdict.nb_keys;
 		p_node->d.dict.ctx        = p_ec;
-		p_node->d.dict.get_by_key = NULL; /* TODO */
+		p_node->d.dict.get_by_key = jnode_get_dict_element;
 		p_node->d.dict.enumerate  = enumerate_dict_keys;
 		return 0;
 	}
@@ -1810,7 +1822,7 @@ int run_test(const char *p_ejson, const char *p_ref, const char *p_name) {
 		if (parse_json(&ref, &a1, &a2, p_ref))
 			return unexpected_fail("could not parse reference JSON:\n  %s\n", p_ref);
 
-		if ((d = are_different(&dut, &ref, &a3)) < 0) {
+		if ((d = are_different(&ref, &dut, &a3)) < 0) {
 			return unexpected_fail("are_different failed to execute\n");
 		}
 		
