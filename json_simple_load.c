@@ -2,18 +2,17 @@
 #include <string.h>
 #include <math.h>
 #include "parse_helpers.h"
-
-struct jdictnode {
-	uint_fast32_t    key;
-	struct jnode     data;
-	struct jdictnode *p_children[4];
-};
+#include "cop/cop_strdict.h"
 
 struct jlistelem {
 	struct jnode      node;
 	struct jlistelem *p_next;
 };
 
+struct jdictnode {
+	struct jnode            data;
+	struct cop_strdict_node node;
+};
 
 static int eat_remaining_string(const char **pp_buf, struct linear_allocator *p_alloc, const char **pp_str) {
 	const char *p_buf = *pp_buf;
@@ -41,61 +40,60 @@ static int get_list_element(struct jnode *p_dest, void *p_ctx, struct linear_all
 	return 0;
 }
 
-static size_t hashfnv(const char *p_str, uint_fast32_t *p_hash) {
-	uint_fast32_t hash = 2166136261;
-	uint_fast32_t c;
-	size_t        length = 0;
-	while ((c = p_str[length++]) != 0)
-		hash = ((hash ^ c) * 16777619) & 0xFFFFFFFFu;
-	*p_hash = hash;
-	return length;
-}
-
 static struct jdictnode *initdictnode(const char *p_str, struct linear_allocator *p_alloc) {
 	struct jdictnode *p_ret;
-	uint_fast32_t     hash;
-	size_t            length = hashfnv(p_str, &hash);
-	p_ret = linear_allocator_alloc(p_alloc, sizeof(struct jdictnode) + length + 1);
+	struct cop_strh key;
+	cop_strh_init_shallow(&key, p_str);
+	p_ret = linear_allocator_alloc(p_alloc, sizeof(struct jdictnode) + key.len + 1);
 	if (p_ret != NULL) {
-		p_ret->key = hash;
-		memset(p_ret->p_children, 0, sizeof(p_ret->p_children));
-		memcpy(p_ret + 1, p_str, length + 1);
+		memcpy((char *)(p_ret + 1), p_str, key.len + 1);
+		key.ptr = (void *)(p_ret + 1);
+		cop_strdict_setup(&(p_ret->node), &key, p_ret);
 	}
 	return p_ret;
 }
 
-static int dict_enumerate(jdict_enumerate_fn *p_fn, void *ctx, struct linear_allocator *p_alloc, void *p_userctx) {
-	/* note there are no failure modes for this enumerate function hence the return values of 1. */
-	if (ctx != NULL) {
-		size_t            save = linear_allocator_save(p_alloc);
-		struct jdictnode *node = ctx;
-		unsigned          i;
-		if (p_fn(&(node->data), (const char *)(node + 1), p_userctx))
-			return 1;
-		for (i = 0; i < 4; i++)
-			if (dict_enumerate(p_fn, node->p_children[i], p_alloc, p_userctx))
-				return 1;
-		/* do this as a checking courtesy - hopefully this will corrupt some memory! */
-		linear_allocator_restore(p_alloc, save);
-	}
+struct jenum_ctx {
+	struct linear_allocator *p_alloc;
+	void                    *p_userctx;
+	jdict_enumerate_fn      *p_fn;
+
+};
+
+static int dict_enumerate_sub(void *p_context, struct cop_strdict_node *p_node, int depth) {
+	struct jenum_ctx *p_ctx = p_context;
+	size_t            save = linear_allocator_save(p_ctx->p_alloc);
+	struct jdictnode *p_data = cop_strdict_node_to_data(p_node);
+	struct cop_strh   key;
+	cop_strdict_node_to_key(p_node, &key);
+	if (p_ctx->p_fn(&(p_data->data), (char *)key.ptr, p_ctx->p_userctx))
+		return 1;
+	linear_allocator_restore(p_ctx->p_alloc, save);
 	return 0;
+}
+
+static int dict_enumerate(jdict_enumerate_fn *p_fn, void *p_ctx, struct linear_allocator *p_alloc, void *p_userctx) {
+	struct jenum_ctx ctx;
+	struct cop_strdict_node *p_root = p_ctx;
+	ctx.p_userctx = p_userctx;
+	ctx.p_alloc = p_alloc;
+	ctx.p_fn = p_fn;
+	return
+		cop_strdict_enumerate
+			(&p_root
+			,dict_enumerate_sub
+			,&ctx
+			);
 }
 
 /* <0 for error >0 for not found 0 for found. */
 static int dict_get_by_key(struct jnode *p_dest, void *ctx, struct linear_allocator *p_alloc, const char *p_key) {
-	uint_fast32_t hash, ukey;
-	struct jdictnode *p_ins = ctx;
-	(void)hashfnv(p_key, &hash);
-	ukey = hash;
-	while (p_ins != NULL) {
-		if (p_ins->key == hash && !strcmp((const char *)(p_ins + 1), p_key)) {
-			*p_dest = p_ins->data;
-			return 0;
-		}
-		p_ins    = p_ins->p_children[ukey & 0x3];
-		ukey   >>= 2;
-	}
-	return 1;
+	struct cop_strdict_node *p_root = ctx;
+	struct jdictnode        *data;
+	if (cop_strdict_get_by_cstr(&p_root, p_key, (void **)&data))
+		return 1;
+	*p_dest = data->data;
+	return 0;
 }
 
 static int expect_object(const char **pp_buf, struct jnode *p_root, struct linear_allocator *p_alloc, struct linear_allocator *p_temps) {
@@ -157,31 +155,21 @@ static int expect_object(const char **pp_buf, struct jnode *p_root, struct linea
 		p_root->d.list.get_elemenent = get_list_element;
 		p_root->d.list.ctx           = p_list;
 	} else if (!expect_char(pp_buf, '{')) {
-		struct jdictnode *p_dict_root = NULL;
+		struct cop_strdict_node *p_dict_root = cop_strdict_init();
 		unsigned          nb_keys = 0;
 		if (eat_whitespace(pp_buf), expect_char(pp_buf, '}')) {
 			while (1) {
 				const char        *keystr;
-				struct jdictnode  *p_key;
-				struct jdictnode **pp_ref = &p_dict_root;
-				struct jdictnode  *p_ins  = *pp_ref;
-				uint_fast32_t      ukey;
+				struct jdictnode  *p_node;
 				if  (   (is_eof(pp_buf))
 					||  (eat_whitespace(pp_buf), expect_string(pp_buf, &keystr, p_temps))
-					||  ((p_key = initdictnode(keystr, p_alloc)) == NULL)
+					||  ((p_node = initdictnode(keystr, p_alloc)) == NULL)
 					||  (eat_whitespace(pp_buf), expect_char(pp_buf, ':'))
-					||  (eat_whitespace(pp_buf), expect_object(pp_buf, &(p_key->data), p_alloc, p_temps))
+					||  (eat_whitespace(pp_buf), expect_object(pp_buf, &(p_node->data), p_alloc, p_temps))
 					)
 					return -1;
-				ukey = p_key->key;
-				while (p_ins != NULL) {
-					if (p_ins->key == p_key->key && !strcmp((const char *)(p_ins + 1), (const char *)(p_key + 1)))
-						return -1; /* duplicate key */
-					pp_ref   = &(p_ins->p_children[ukey & 0x3]);
-					ukey   >>= 2;
-					p_ins    = *pp_ref;
-				}
-				*pp_ref = p_key;
+				if (cop_strdict_insert(&p_dict_root, &(p_node->node)))
+					return -1; /* duplicate key */
 				nb_keys++;
 				eat_whitespace(pp_buf);
 				if (!expect_char(pp_buf, ',')) {
