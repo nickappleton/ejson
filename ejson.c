@@ -1838,6 +1838,8 @@ int run_test(const char *p_ejson, const char *p_ref, const char *p_name) {
 		printf("PASSED: test '%s'.\n", p_name);
 	}
 
+	evaluation_context_free(&ws);
+
 	return 0;
 }
 

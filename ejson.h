@@ -1,10 +1,10 @@
 #ifndef EJSON_H
 #define EJSON_H
 
-#include "json_iface.h"
+#include "ejson_iface.h"
 #include <stdarg.h>
-#include "../istrings.h"
-#include "../pdict.h"
+#include "../opendiapason/src/istrings.h"
+#include "../opendiapason/src/pdict.h"
 
 
 

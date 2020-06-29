@@ -2,7 +2,7 @@
 #define JSON_IFACE_UTILS_H
 
 #include <stdlib.h>
-#include "json_iface.h"
+#include "ejson_iface.h"
 
 /* returns non zero on error */
 int jnode_print(struct jnode *p_root, struct linear_allocator *p_alloc, unsigned indent);
