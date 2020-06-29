@@ -1,7 +1,7 @@
 #include "json_simple_load.h"
 #include <string.h>
 #include <math.h>
-#include "parse_helpers.h"
+#include "ejson/src/parse_helpers.h"
 #include "cop/cop_strdict.h"
 
 struct jlistelem {
