@@ -642,18 +642,10 @@ static int tokeniser_start(struct tokeniser *p_tokeniser, const char *buf) {
 }
 
 
-int evaluation_context_init(struct evaluation_context *p_ctx) {
-	if (istrings_init(&(p_ctx->strings)))
-		return -1;
+void evaluation_context_init(struct evaluation_context *p_ctx) {
 	p_ctx->alloc.pos = 0;
 	p_ctx->stack_depth = 0;
-	pdict_init(&(p_ctx->workspace));
-	return 0;
-}
-
-void evaluation_context_free(struct evaluation_context *p_ctx) {
-	pdict_free(&(p_ctx->workspace));
-	istrings_free(&(p_ctx->strings));
+	cop_strdict_init(&(p_ctx->workspace));
 }
 
 const struct ast_node *expect_expression(struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser, const struct ejson_error_handler *p_error_handler);
@@ -678,13 +670,11 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 	}
 
 	if (p_token->cls == &TOK_IDENTIFIER) {
-		const struct istring   *k;
-		const struct ast_node **node;
-		if ((k = istrings_add(&(p_workspace->strings), p_token->t.strident.str)) == NULL)
-			return ejson_error_null(p_error_handler, "out of memory\n");
-		if ((node = (const struct ast_node **)pdict_get(&(p_workspace->workspace), (uintptr_t)(k->cstr))) == NULL)
-			return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "'%s' was not found in the workspace\n", k->cstr);
-		return *node;
+		const struct ast_node *node;
+		if (cop_strdict_get_by_cstr(&(p_workspace->workspace), p_token->t.strident.str, (void **)&node))
+			return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "'%s' was not found in the workspace\n", p_token->t.strident.str);
+		assert(node != NULL);
+		return node;
 	}
 
 	if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
@@ -814,7 +804,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 	} else if (p_token->cls == &TOK_FUNC) {
 		unsigned        nb_args = 0;
 		unsigned        i;
-		uintptr_t       argnames[64];
+		struct cop_strh argnames[64];
 		if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
 		if (p_token->cls != &TOK_LSQBR)
@@ -828,25 +818,27 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 				struct token_pos_info identpos;
 				void **node;
 				struct ast_node *p_arg;
+				struct cop_strdict_node *p_wsnode;
 				identpos = p_token->posinfo;
 				if (p_token->cls != &TOK_IDENTIFIER)
 					return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "expected a parameter name literal but got a %s token\n", p_token->cls->name);
-				if ((k = istrings_add(&(p_workspace->strings), p_token->t.strident.str)) == NULL)
+				cop_strh_init_shallow(&(argnames[nb_args]), p_token->t.strident.str);
+				if ((p_arg = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
 					return ejson_error_null(p_error_handler, "out of memory\n");
+				/* todo, this memory will be used forever. could go on stack with aalloc(). */
+				if ((p_wsnode = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node) + argnames[nb_args].len + 1)) == NULL)
+					return ejson_error_null(p_error_handler, "out of memory\n");
+				memcpy((char *)(p_wsnode + 1), p_token->t.strident.str, argnames[nb_args].len + 1);
+				argnames[nb_args].ptr = (unsigned char *)(p_wsnode + 1);
+				cop_strdict_setup(p_wsnode, &(argnames[nb_args]), p_arg);
+				if (cop_strdict_insert(&(p_workspace->workspace), p_wsnode))
+					return ejson_location_error_null(p_error_handler, &identpos, "function parameter names may only appear once and must alias workspace variables\n");
 				if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
 					return NULL;
 				if (p_token->cls != &TOK_COMMA && p_token->cls != &TOK_RSQBR)
 					return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "expected a , or ]\n");
-				argnames[nb_args] = (uintptr_t)(k->cstr);
-				node = pdict_get(&(p_workspace->workspace), argnames[nb_args]);
-				if (node != NULL)
-					return ejson_location_error_null(p_error_handler, &identpos, "function parameter names may only appear once and must alias workspace variables\n");
-				if ((p_arg = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
-					return ejson_error_null(p_error_handler, "out of memory\n");
 				p_arg->cls = &AST_CLS_STACKREF;
 				p_arg->d.i = p_workspace->stack_depth + nb_args + 1;
-				if (pdict_set(&(p_workspace->workspace), argnames[nb_args], p_arg))
-					return ejson_error_null(p_error_handler, "out of memory\n");
 				nb_args++;
 				if (p_token->cls == &TOK_RSQBR)
 					break;
@@ -865,7 +857,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		p_workspace->stack_depth -= nb_args;
 
 		for (i = 0; i < nb_args; i++) {
-			if (pdict_delete(&(p_workspace->workspace), argnames[i])) {
+			if (cop_strdict_delete(&(p_workspace->workspace), &(argnames[i])) == NULL) {
 				fprintf(stderr, "ICE\n");
 				abort();
 			}
@@ -1705,17 +1697,18 @@ int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace,
 	const struct token *p_token;
 
 	while ((p_token = tok_peek(p_tokeniser)) != NULL && p_token->cls == &TOK_DEFINE) {
-		const struct istring *p_key;
-		void **pp_obj;
+		struct cop_strh ident;
+		struct cop_strdict_node *p_wsnode;
 		p_token = tok_read(p_tokeniser, p_error_handler); assert(p_token != NULL);
 		if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
 			return 1;
 		if (p_token->cls != &TOK_IDENTIFIER)
 			return ejson_location_error(p_error_handler, &(p_token->posinfo), "expected an identifier\n");
-		if ((p_key = istrings_add(&(p_workspace->strings), p_token->t.strident.str)) == NULL)
+		cop_strh_init_shallow(&ident, p_token->t.strident.str);
+		if ((p_wsnode = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node) + ident.len + 1)) == NULL)
 			return ejson_error(p_error_handler, "out of memory\n");
-		if ((pp_obj = pdict_get(&(p_workspace->workspace), (uintptr_t)(p_key->cstr))) != NULL)
-			return ejson_error(p_error_handler, "cannot redefine variable '%s'\n", p_token->t.strident.str);
+		memcpy((char *)(p_wsnode + 1), p_token->t.strident.str, ident.len + 1);
+		ident.ptr = (unsigned char *)(p_wsnode + 1);
 		if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
 			return 1;
 		if (p_token->cls != &TOK_ASSIGN)
@@ -1726,8 +1719,9 @@ int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace,
 			return 1;
 		if (p_token->cls != &TOK_SEMI)
 			return ejson_location_error(p_error_handler, &(p_token->posinfo), "expected ';'\n");
-		if (pdict_set(&(p_workspace->workspace), (uintptr_t)(p_key->cstr), (void *)p_obj))
-			return ejson_error(p_error_handler, "out of memory\n");
+		cop_strdict_setup(p_wsnode, &ident, (void *)p_obj);
+		if (cop_strdict_insert(&(p_workspace->workspace), p_wsnode))
+			return ejson_error(p_error_handler, "cannot redefine variable '%s'\n", ident.ptr);
 	}
 	if ((p_obj = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
 		return 1;
@@ -1794,8 +1788,7 @@ int run_test(const char *p_ejson, const char *p_ref, const char *p_name) {
 	err.p_context = NULL;
 	err.on_parser_error = on_parser_error;
 
-	if (evaluation_context_init(&ws))
-		return unexpected_fail("could not init workspace\n");
+	evaluation_context_init(&ws);
 
 	if (ejson_load(&dut, &ws, p_ejson, &err)) {
 		if (p_ref != NULL) {
@@ -1837,8 +1830,6 @@ int run_test(const char *p_ejson, const char *p_ref, const char *p_name) {
 
 		printf("PASSED: test '%s'.\n", p_name);
 	}
-
-	evaluation_context_free(&ws);
 
 	return 0;
 }

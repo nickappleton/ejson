@@ -3,8 +3,7 @@
 
 #include "ejson_iface.h"
 #include <stdarg.h>
-#include "../opendiapason/src/istrings.h"
-#include "../opendiapason/src/pdict.h"
+#include "cop/cop_strdict.h"
 
 
 
@@ -21,16 +20,13 @@ struct ejson_error_handler {
 
 
 struct evaluation_context {
-	struct istrings         strings;
-	struct pdict            workspace;
+	struct cop_strdict      workspace;
 	struct linear_allocator alloc;
 	unsigned                stack_depth;
-	unsigned                current_statement;
 
 };
 
-int evaluation_context_init(struct evaluation_context *p_ctx);
-void evaluation_context_free(struct evaluation_context *p_ctx);
+void evaluation_context_init(struct evaluation_context *p_ctx);
 int ejson_load(struct jnode *p_node, struct evaluation_context *p_workspace, const char *p_document, struct ejson_error_handler *p_error_handler);
 
 #endif /* EJSON_H */
