@@ -643,9 +643,9 @@ static int tokeniser_start(struct tokeniser *p_tokeniser, const char *buf) {
 
 
 void evaluation_context_init(struct evaluation_context *p_ctx) {
-	p_ctx->alloc.pos = 0;
+	p_ctx->alloc.pos   = 0;
 	p_ctx->stack_depth = 0;
-	cop_strdict_init(&(p_ctx->workspace));
+	p_ctx->p_workspace = cop_strdict_init();
 }
 
 const struct ast_node *expect_expression(struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser, const struct ejson_error_handler *p_error_handler);
@@ -671,7 +671,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 
 	if (p_token->cls == &TOK_IDENTIFIER) {
 		const struct ast_node *node;
-		if (cop_strdict_get_by_cstr(&(p_workspace->workspace), p_token->t.strident.str, (void **)&node))
+		if (cop_strdict_get_by_cstr(&(p_workspace->p_workspace), p_token->t.strident.str, (void **)&node))
 			return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "'%s' was not found in the workspace\n", p_token->t.strident.str);
 		assert(node != NULL);
 		return node;
@@ -831,7 +831,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 				memcpy((char *)(p_wsnode + 1), p_token->t.strident.str, argnames[nb_args].len + 1);
 				argnames[nb_args].ptr = (unsigned char *)(p_wsnode + 1);
 				cop_strdict_setup(p_wsnode, &(argnames[nb_args]), p_arg);
-				if (cop_strdict_insert(&(p_workspace->workspace), p_wsnode))
+				if (cop_strdict_insert(&(p_workspace->p_workspace), p_wsnode))
 					return ejson_location_error_null(p_error_handler, &identpos, "function parameter names may only appear once and must alias workspace variables\n");
 				if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
 					return NULL;
@@ -857,7 +857,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		p_workspace->stack_depth -= nb_args;
 
 		for (i = 0; i < nb_args; i++) {
-			if (cop_strdict_delete(&(p_workspace->workspace), &(argnames[i])) == NULL) {
+			if (cop_strdict_delete(&(p_workspace->p_workspace), &(argnames[i])) == NULL) {
 				fprintf(stderr, "ICE\n");
 				abort();
 			}
@@ -1720,7 +1720,7 @@ int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace,
 		if (p_token->cls != &TOK_SEMI)
 			return ejson_location_error(p_error_handler, &(p_token->posinfo), "expected ';'\n");
 		cop_strdict_setup(p_wsnode, &ident, (void *)p_obj);
-		if (cop_strdict_insert(&(p_workspace->workspace), p_wsnode))
+		if (cop_strdict_insert(&(p_workspace->p_workspace), p_wsnode))
 			return ejson_error(p_error_handler, "cannot redefine variable '%s'\n", ident.ptr);
 	}
 	if ((p_obj = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)

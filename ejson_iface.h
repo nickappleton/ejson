@@ -1,5 +1,12 @@
-#ifndef JSON_IFACE
-#define JSON_IFACE
+#ifndef EJSON_IFACE
+#define EJSON_IFACE
+
+/* The ejson interface provides access to a data-structure which can represent
+ * a sub-set of JSON. It is the subset where
+ *
+ * - Strings cannot contain a null terminator ("\0000" in JSON)
+ * - Dictionaries cannot contain a duplicate key.
+ */
 
 #include "linear_allocator.h"
 

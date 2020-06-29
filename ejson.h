@@ -20,9 +20,9 @@ struct ejson_error_handler {
 
 
 struct evaluation_context {
-	struct cop_strdict      workspace;
-	struct linear_allocator alloc;
-	unsigned                stack_depth;
+	struct cop_strdict_node *p_workspace;
+	struct linear_allocator  alloc;
+	unsigned                 stack_depth;
 
 };
 
