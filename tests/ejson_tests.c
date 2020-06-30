@@ -3,6 +3,7 @@
 #include "ejson/json_iface_utils.h"
 #include "ejson/ejson.h"
 #include <stdarg.h>
+#include <stdio.h>
 
 static int unexpected_fail(const char *p_fmt, ...) {
 	va_list args;
@@ -34,12 +35,17 @@ int run_test(const char *p_ejson, const char *p_ref, const char *p_name) {
 	struct jnode dut;
 	struct evaluation_context ws;
 	struct ejson_error_handler err;
+	struct cop_salloc_iface alloc;
+	struct cop_alloc_grp_temps mem;
+
 	int d;
 	
 	err.p_context = (p_ref == NULL) ? stdout : stderr;
 	err.on_parser_error = on_parser_error;
 
-	evaluation_context_init(&ws);
+	cop_alloc_grp_temps_init(&mem, &alloc, 1024, 1024*1024, 16);
+
+	evaluation_context_init(&ws, &alloc);
 
 	if (ejson_load(&dut, &ws, p_ejson, &err)) {
 		if (p_ref != NULL) {
@@ -55,13 +61,16 @@ int run_test(const char *p_ejson, const char *p_ref, const char *p_name) {
 
 	if (p_ref != NULL) {
 		struct jnode ref;
-		struct linear_allocator a1;
-		struct linear_allocator a2;
-		struct linear_allocator a3;
+		struct cop_salloc_iface a1;
+		struct cop_alloc_grp_temps m1;
+		struct cop_salloc_iface a2;
+		struct cop_alloc_grp_temps m2;
+		struct cop_salloc_iface a3;
+		struct cop_alloc_grp_temps m3;
 
-		a1.pos = 0;
-		a2.pos = 0;
-		a3.pos = 0;
+		cop_alloc_grp_temps_init(&m1, &a1, 1024, 1024*1024, 16);
+		cop_alloc_grp_temps_init(&m2, &a2, 1024, 1024*1024, 16);
+		cop_alloc_grp_temps_init(&m3, &a3, 1024, 1024*1024, 16);
 
 		if (parse_json(&ref, &a1, &a2, p_ref))
 			return unexpected_fail("could not parse reference JSON:\n  %s\n", p_ref);

@@ -1,11 +1,12 @@
 #include "ejson/json_iface_utils.h"
 #include <string.h>
 #include <math.h>
+#include <stdio.h>
 
 struct are_different_enum_state {
 	int                      ret;
 	struct jnode            *p_other;
-	struct linear_allocator *p_alloc;
+	struct cop_salloc_iface *p_alloc;
 
 };
 
@@ -22,7 +23,7 @@ static int are_different_jdict_enumerate(struct jnode *p_node, const char *p_key
 /* < 0 on error
  * 0 if same
  * 1 if different */
-int are_different(struct jnode *p_x1, struct jnode *p_x2, struct linear_allocator *p_alloc) {
+int are_different(struct jnode *p_x1, struct jnode *p_x2, struct cop_salloc_iface *p_alloc) {
 	if (p_x1->cls != p_x2->cls)
 		return 1;
 	if (p_x1->cls == JNODE_CLS_INTEGER || p_x1->cls == JNODE_CLS_BOOL)
@@ -39,15 +40,15 @@ int are_different(struct jnode *p_x1, struct jnode *p_x2, struct linear_allocato
 			struct jnode cx1;
 			struct jnode cx2;
 			int d;
-			size_t save = linear_allocator_save(p_alloc);
+			size_t save = cop_salloc_save(p_alloc);
 			if  (   p_x1->d.list.get_elemenent(&cx1, p_x1->d.list.ctx, p_alloc, i)
 			    ||  p_x2->d.list.get_elemenent(&cx2, p_x2->d.list.ctx, p_alloc, i)
 			    ) {
-				linear_allocator_restore(p_alloc, save);
+				cop_salloc_restore(p_alloc, save);
 				return -1;
 			}
 			d = are_different(&cx1, &cx2, p_alloc);
-			linear_allocator_restore(p_alloc, save);
+			cop_salloc_restore(p_alloc, save);
 			if (d != 0)
 				return d;
 		}
@@ -69,7 +70,7 @@ int are_different(struct jnode *p_x1, struct jnode *p_x2, struct linear_allocato
 }
 
 struct jnodeenum_state {
-	struct linear_allocator *p_alloc;
+	struct cop_salloc_iface *p_alloc;
 	unsigned indent;
 	int has_printed_something;
 
@@ -85,7 +86,7 @@ static int jnode_print_jdict_enumerate(struct jnode *p_dest, const char *p_key, 
 	return jnode_print(p_dest, p_s->p_alloc, p_s->indent + 1);
 }
 
-int jnode_print(struct jnode *p_root, struct linear_allocator *p_alloc, unsigned indent) {
+int jnode_print(struct jnode *p_root, struct cop_salloc_iface *p_alloc, unsigned indent) {
 	if (p_root->cls == JNODE_CLS_NULL) {
 		printf("null\n");
 	} else if (p_root->cls == JNODE_CLS_BOOL) {
@@ -108,13 +109,13 @@ int jnode_print(struct jnode *p_root, struct linear_allocator *p_alloc, unsigned
 			printf("[");
 			for (i = 0; i < p_root->d.list.nb_elements; i++) {
 				struct jnode tmp;
-				size_t lap = p_alloc->pos;
+				size_t lap = cop_salloc_save(p_alloc);
 				if (i)
 					printf("%*s,", indent, "");
 				if  (   p_root->d.list.get_elemenent(&tmp, p_root->d.list.ctx, p_alloc, i)
 				    ||  jnode_print(&tmp, p_alloc, indent + 1)
 				    ) {
-					p_alloc->pos = lap;
+					cop_salloc_restore(p_alloc, lap);
 					return -1;
 				}
 			}

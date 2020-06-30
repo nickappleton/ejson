@@ -8,7 +8,7 @@
  * - Dictionaries cannot contain a duplicate key.
  */
 
-#include "linear_allocator.h"
+#include "cop/cop_alloc.h"
 
 #define JNODE_CLS_NULL    (0)
 #define JNODE_CLS_STRING  (1)
@@ -40,17 +40,17 @@ struct jnode {
 			unsigned    nb_elements;
 
 			/* return != 0 for error */
-			int       (*get_elemenent)(struct jnode *p_dest, void *ctx, struct linear_allocator *p_alloc, unsigned idx);
+			int       (*get_elemenent)(struct jnode *p_dest, void *ctx, struct cop_salloc_iface *p_alloc, unsigned idx);
 		} list;
 		struct {
 			void       *ctx;
 			unsigned    nb_keys;
 
 			/* return < 0 for error, > 0 for callback requested termination or 0 for finished successfully */
-			int       (*enumerate)(jdict_enumerate_fn *p_fn, void *ctx, struct linear_allocator *p_alloc, void *p_userctx);
+			int       (*enumerate)(jdict_enumerate_fn *p_fn, void *ctx, struct cop_salloc_iface *p_alloc, void *p_userctx);
 
 			/* return < 0 for error, > 0 for key not found or 0 for successful */
-			int       (*get_by_key)(struct jnode *p_dest, void *ctx, struct linear_allocator *p_alloc, const char *p_key);
+			int       (*get_by_key)(struct jnode *p_dest, void *ctx, struct cop_salloc_iface *p_alloc, const char *p_key);
 		} dict;
 	} d;
 };

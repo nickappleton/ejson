@@ -5,7 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include "ejson/linear_allocator.h"
 #include "parse_helpers.h"
 
 
@@ -133,7 +132,7 @@ struct ast_node {
 			const struct ast_node **pp_stack;
 			unsigned                stack_size;
 
-			const struct ast_node *(*get_element)(const struct ast_node *p_list, unsigned element, struct linear_allocator *p_alloc, const struct ejson_error_handler *p_error_handler);
+			const struct ast_node *(*get_element)(const struct ast_node *p_list, unsigned element, struct cop_salloc_iface *p_alloc, const struct ejson_error_handler *p_error_handler);
 			union {
 				struct {
 					long long first;
@@ -179,7 +178,6 @@ static size_t hashfnv(const char *p_str, uint_fast32_t *p_hash) {
 struct dictnode *rdict_find(struct dictnode *p_root, const char *p_string) {
 	uint_fast32_t hash, ukey;
 	size_t len;
-	const struct ast_node *p_key;
 	len  = hashfnv(p_string, &hash);
 	ukey = hash;
 	while (p_root != NULL) {
@@ -641,8 +639,8 @@ static int tokeniser_start(struct tokeniser *p_tokeniser, const char *buf) {
 }
 
 
-void evaluation_context_init(struct evaluation_context *p_ctx) {
-	p_ctx->alloc.pos   = 0;
+void evaluation_context_init(struct evaluation_context *p_ctx, struct cop_salloc_iface *p_alloc) {
+	p_ctx->p_alloc     = p_alloc;
 	p_ctx->stack_depth = 0;
 	p_ctx->p_workspace = cop_strdict_init();
 }
@@ -676,7 +674,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		return node;
 	}
 
-	if ((p_ret = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
+	if ((p_ret = cop_salloc(p_workspace->p_alloc, sizeof(struct ast_node), 0)) == NULL)
 		return ejson_error_null(p_error_handler, "out of memory\n");
 	p_ret->doc_pos = p_token->posinfo;
 
@@ -701,7 +699,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 	} else if (p_token->cls == &TOK_STRING) {
 		size_t sl = strlen(p_token->t.strident.str);
 		char *p_strbuf;
-		if ((p_strbuf = linear_allocator_alloc(&(p_workspace->alloc), sl + 1)) == NULL)
+		if ((p_strbuf = cop_salloc(p_workspace->p_alloc, sl + 1, 1)) == NULL)
 			return ejson_error_null(p_error_handler, "out of memory\n");
 		memcpy(p_strbuf, p_token->t.strident.str, sl + 1);
 		p_ret->cls          = &AST_CLS_LITERAL_STRING;
@@ -739,7 +737,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		p_ret->cls             = &AST_CLS_LITERAL_DICT;
 		p_ret->d.ldict.nb_keys = nb_kvs;
 		if (nb_kvs) {
-			if ((p_ret->d.ldict.elements = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node *) * nb_kvs * 2)) == NULL)
+			if ((p_ret->d.ldict.elements = cop_salloc(p_workspace->p_alloc, sizeof(struct ast_node *) * nb_kvs * 2, 0 )) == NULL)
 				return ejson_error_null(p_error_handler, "out of memory\n");
 			memcpy(p_ret->d.ldict.elements, p_temp_nodes, sizeof(struct ast_node *) * nb_kvs * 2);
 		} else {
@@ -770,7 +768,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		p_ret->cls        = &AST_CLS_LITERAL_LIST;
 		p_ret->d.llist.nb_elements = nb_list;
 		if (nb_list) {
-			if ((p_ret->d.llist.elements = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node *) * nb_list)) == NULL)
+			if ((p_ret->d.llist.elements = cop_salloc(p_workspace->p_alloc, sizeof(struct ast_node *) * nb_list, 0)) == NULL)
 				return ejson_error_null(p_error_handler, "out of memory\n");
 			memcpy(p_ret->d.llist.elements, p_temp_nodes, sizeof(struct ast_node *) * nb_list);
 		} else {
@@ -813,19 +811,17 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 
 		if (p_token->cls != &TOK_RSQBR) {
 			do {
-				const struct istring *k;
 				struct token_pos_info identpos;
-				void **node;
 				struct ast_node *p_arg;
 				struct cop_strdict_node *p_wsnode;
 				identpos = p_token->posinfo;
 				if (p_token->cls != &TOK_IDENTIFIER)
 					return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "expected a parameter name literal but got a %s token\n", p_token->cls->name);
 				cop_strh_init_shallow(&(argnames[nb_args]), p_token->t.strident.str);
-				if ((p_arg = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
+				if ((p_arg = cop_salloc(p_workspace->p_alloc, sizeof(struct ast_node), 0)) == NULL)
 					return ejson_error_null(p_error_handler, "out of memory\n");
 				/* todo, this memory will be used forever. could go on stack with aalloc(). */
-				if ((p_wsnode = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node) + argnames[nb_args].len + 1)) == NULL)
+				if ((p_wsnode = cop_salloc(p_workspace->p_alloc, sizeof(struct ast_node) + argnames[nb_args].len + 1, 0)) == NULL)
 					return ejson_error_null(p_error_handler, "out of memory\n");
 				memcpy((char *)(p_wsnode + 1), p_token->t.strident.str, argnames[nb_args].len + 1);
 				argnames[nb_args].ptr = (unsigned char *)(p_wsnode + 1);
@@ -908,7 +904,7 @@ const struct ast_node *expect_expression_1(const struct ast_node *p_lhs, struct 
 
 		assert(p_op->bin_op_cls != NULL);
 
-		if ((p_comb = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node))) == NULL)
+		if ((p_comb = cop_salloc(p_workspace->p_alloc, sizeof(struct ast_node), 0)) == NULL)
 			return ejson_error_null(p_error_handler, "out of memory\n");
 
 		p_comb->cls           = p_op->bin_op_cls;
@@ -937,7 +933,7 @@ struct jnode_data {
 
 };
 
-static int to_jnode(struct jnode *p_node, const struct ast_node *p_src, struct linear_allocator *p_alloc, const struct ejson_error_handler *p_error_handler);
+static int to_jnode(struct jnode *p_node, const struct ast_node *p_src, struct cop_salloc_iface *p_alloc, const struct ejson_error_handler *p_error_handler);
 
 struct list_element_fn_data {
 	struct p_error_handler  *p_error_handler;
@@ -954,7 +950,7 @@ struct execution_context {
 
 };
 
-const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct ast_node **pp_stackx, unsigned stack_sizex, struct linear_allocator *p_alloc, const struct ejson_error_handler *p_error_handler);
+const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct ast_node **pp_stackx, unsigned stack_sizex, struct cop_salloc_iface *p_alloc, const struct ejson_error_handler *p_error_handler);
 
 struct lrange {
 	long long first;
@@ -963,12 +959,12 @@ struct lrange {
 
 };
 
-const struct ast_node *ast_list_generator_get_element(const struct ast_node *p_list, unsigned element, struct linear_allocator *p_alloc, const struct ejson_error_handler *p_error_handler) {
+const struct ast_node *ast_list_generator_get_element(const struct ast_node *p_list, unsigned element, struct cop_salloc_iface *p_alloc, const struct ejson_error_handler *p_error_handler) {
 	struct ast_node *p_dest;
 	assert(p_list->cls == &AST_CLS_LIST_GENERATOR);
 	if (element >= p_list->d.lgen.nb_elements)
 		return (ejson_error(p_error_handler, "list index out of range\n"), NULL);
-	if ((p_dest = linear_allocator_alloc(p_alloc, sizeof(struct ast_node))) == NULL)
+	if ((p_dest = cop_salloc(p_alloc, sizeof(struct ast_node), 0)) == NULL)
 		return ejson_error_null(p_error_handler, "out of memory\n");
 	p_dest->doc_pos = p_list->doc_pos;
 	p_dest->cls     = &AST_CLS_LITERAL_INT;
@@ -976,7 +972,7 @@ const struct ast_node *ast_list_generator_get_element(const struct ast_node *p_l
 	return p_dest;
 }
 
-const struct ast_node *get_literal_element_fn(const struct ast_node *p_src, unsigned element, struct linear_allocator *p_alloc, const struct ejson_error_handler *p_error_handler) {
+const struct ast_node *get_literal_element_fn(const struct ast_node *p_src, unsigned element, struct cop_salloc_iface *p_alloc, const struct ejson_error_handler *p_error_handler) {
 	assert(p_src->cls == &AST_CLS_LIST_GENERATOR);
 	if (element >= p_src->d.lgen.nb_elements)
 		return (ejson_error(p_error_handler, "list index out of bounds\n"), NULL);
@@ -985,7 +981,7 @@ const struct ast_node *get_literal_element_fn(const struct ast_node *p_src, unsi
 	return p_src;
 }
 
-const struct ast_node *ast_list_generator_map(const struct ast_node *p_src, unsigned element, struct linear_allocator *p_alloc, const struct ejson_error_handler *p_error_handler) {
+const struct ast_node *ast_list_generator_map(const struct ast_node *p_src, unsigned element, struct cop_salloc_iface *p_alloc, const struct ejson_error_handler *p_error_handler) {
 	const struct ast_node *p_argument;
 	const struct ast_node **pp_tmp;
 	const struct ast_node *p_function;
@@ -1006,7 +1002,7 @@ const struct ast_node *ast_list_generator_map(const struct ast_node *p_src, unsi
 
 	assert(p_src->d.lgen.stack_size == p_function->d.fn.stack_depth_at_function_def || !p_function->d.fn.stack_depth_at_function_def);
 
-	if ((pp_tmp = linear_allocator_alloc(p_alloc, sizeof(struct ast_node *) * (p_function->d.fn.stack_depth_at_function_def + 1))) == NULL)
+	if ((pp_tmp = cop_salloc(p_alloc, sizeof(struct ast_node *) * (p_function->d.fn.stack_depth_at_function_def + 1), 0)) == NULL)
 		return ejson_error_null(p_error_handler, "out of memory\n");
 	if (p_function->d.fn.stack_depth_at_function_def)
 		memcpy(pp_tmp, p_src->d.lgen.pp_stack, p_function->d.fn.stack_depth_at_function_def * sizeof(struct ast_node *));
@@ -1015,7 +1011,7 @@ const struct ast_node *ast_list_generator_map(const struct ast_node *p_src, unsi
 	return evaluate_ast(p_function->d.fn.node, pp_tmp, p_function->d.fn.stack_depth_at_function_def + 1, p_alloc, p_error_handler);
 }
 
-const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct ast_node **pp_stackx, unsigned stack_sizex, struct linear_allocator *p_alloc, const struct ejson_error_handler *p_error_handler) {
+const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct ast_node **pp_stackx, unsigned stack_sizex, struct cop_salloc_iface *p_alloc, const struct ejson_error_handler *p_error_handler) {
 	/* Move through stack references. */
 	assert(p_src->cls != NULL);
 	assert(p_src->cls->p_name != NULL);
@@ -1046,7 +1042,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 	/* Convert lists into list generators */
 	if  (p_src->cls == &AST_CLS_LITERAL_LIST) {
 		struct ast_node *p_ret;
-		if ((p_ret = linear_allocator_alloc(p_alloc, sizeof(struct ast_node))) == NULL)
+		if ((p_ret = cop_salloc(p_alloc, sizeof(struct ast_node), 0)) == NULL)
 			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->cls                        = &AST_CLS_LIST_GENERATOR;
 		p_ret->doc_pos                    = p_src->doc_pos;
@@ -1140,7 +1136,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		}
 		strbuf[i] = '\0';
 
-		if ((p_ret = linear_allocator_alloc(p_alloc, sizeof(struct ast_node) + i + 1)) == NULL)
+		if ((p_ret = cop_salloc(p_alloc, sizeof(struct ast_node) + i + 1, 0)) == NULL)
 			return NULL;
 		ob = (char *)(p_ret + 1);
 		memcpy(ob, strbuf, i+1);
@@ -1181,7 +1177,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 				ukey >>= DICTNODE_BITS;
 			}
 
-			if ((p_iter = linear_allocator_alloc(p_alloc, sizeof(struct dictnode) + len + 1)) == NULL)
+			if ((p_iter = cop_salloc(p_alloc, sizeof(struct dictnode) + len + 1, 0)) == NULL)
 				return ejson_error_null(p_error_handler, "out of memory\n");
 			p_iter->data2 = p_src->d.ldict.elements[2*i+1];
 			p_iter->key  = hash;
@@ -1191,7 +1187,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 			*pp_ipos = p_iter;
 		}
 
-		if ((p_ret = linear_allocator_alloc(p_alloc, sizeof(struct ast_node))) == NULL)
+		if ((p_ret = cop_salloc(p_alloc, sizeof(struct ast_node), 0)) == NULL)
 			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->cls                = &AST_CLS_READY_DICT;
 		p_ret->doc_pos            = p_src->doc_pos;
@@ -1204,19 +1200,18 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 
 	if (p_src->cls == &AST_CLS_ACCESS) {
 		const struct ast_node *p_list;
-		const struct ast_node *p_ret;
 		if ((p_list = evaluate_ast(p_src->d.access.p_data, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
 			return NULL;
 		if (p_list->cls == &AST_CLS_LIST_GENERATOR) {
 			const struct ast_node *p_idx;
 			long long idx;
-			size_t save = linear_allocator_save(p_alloc);
+			size_t save = cop_salloc_save(p_alloc);
 			if ((p_idx = evaluate_ast(p_src->d.access.p_key, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
 				return NULL;
 			if (p_idx->cls != &AST_CLS_LITERAL_INT)
 				return ejson_location_error_null(p_error_handler, &(p_src->d.access.p_key->doc_pos), "the key expression for a list access did not evaluate to an integer\n");
 			idx = p_idx->d.i;
-			linear_allocator_restore(p_alloc, save);
+			cop_salloc_restore(p_alloc, save);
 			return p_list->d.lgen.get_element(p_list, idx, p_alloc, p_error_handler);
 		}
 		
@@ -1254,7 +1249,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		if (p_args->d.lgen.nb_elements) {
 			unsigned i;
 			assert(stack_sizex == p_function->d.fn.stack_depth_at_function_def || !p_function->d.fn.stack_depth_at_function_def);
-			if ((pp_stack2 = linear_allocator_alloc(p_alloc, sizeof(struct ast_node *) * (p_function->d.fn.stack_depth_at_function_def + p_args->d.lgen.nb_elements))) == NULL)
+			if ((pp_stack2 = cop_salloc(p_alloc, sizeof(struct ast_node *) * (p_function->d.fn.stack_depth_at_function_def + p_args->d.lgen.nb_elements), 0)) == NULL)
 				return ejson_error_null(p_error_handler, "out of memory\n");
 			if (p_function->d.fn.stack_depth_at_function_def)
 				memcpy(pp_stack2, pp_stackx, p_function->d.fn.stack_depth_at_function_def * sizeof(struct ast_node *));
@@ -1273,23 +1268,23 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		struct ast_node       *p_tmp2;
 		size_t                 save;
 
-		if ((p_tmp2 = linear_allocator_alloc(p_alloc, sizeof(struct ast_node))) == NULL)
+		if ((p_tmp2 = cop_salloc(p_alloc, sizeof(struct ast_node), 0)) == NULL)
 			return ejson_error_null(p_error_handler, "out of memory\n");
-		save = linear_allocator_save(p_alloc);
+		save = cop_salloc_save(p_alloc);
 		if ((p_result = evaluate_ast(p_src->d.binop.p_lhs, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
 			return NULL;
 
 		if (p_result->cls == &AST_CLS_LITERAL_INT) {
 			p_tmp2->cls = &AST_CLS_LITERAL_INT;
 			p_tmp2->d.i = -p_result->d.i;
-			linear_allocator_restore(p_alloc, save);
+			cop_salloc_restore(p_alloc, save);
 			return p_tmp2;
 		}
 
 		if (p_result->cls == &AST_CLS_LITERAL_FLOAT) {
 			p_tmp2->cls = &AST_CLS_LITERAL_FLOAT;
 			p_tmp2->d.f = -p_result->d.f;
-			linear_allocator_restore(p_alloc, save);
+			cop_salloc_restore(p_alloc, save);
 			return p_tmp2;
 		}
 
@@ -1303,9 +1298,9 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		struct lrange          lrange;
 		const struct ast_node *p_args;
 
-		if ((p_result = linear_allocator_alloc(p_alloc, sizeof(struct ast_node))) == NULL)
+		if ((p_result = cop_salloc(p_alloc, sizeof(struct ast_node), 0)) == NULL)
 			return ejson_error_null(p_error_handler, "out of memory\n");
-		save     = linear_allocator_save(p_alloc);
+		save = cop_salloc_save(p_alloc);
 		if ((p_args = evaluate_ast(p_src->d.builtin.p_args, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
 			return NULL;
 		if (p_args->cls != &AST_CLS_LIST_GENERATOR)
@@ -1357,7 +1352,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 			lrange.numel     = (p_last->d.i - p_first->d.i) / p_step->d.i + 1;
 		}
 
-		linear_allocator_restore(p_alloc, save);
+		cop_salloc_restore(p_alloc, save);
 		
 		p_result->cls                  = &AST_CLS_LIST_GENERATOR;
 		p_result->doc_pos              = p_src->doc_pos;
@@ -1381,7 +1376,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		if (p_list->cls != &AST_CLS_LIST_GENERATOR)
 			return ejson_location_error_null(p_error_handler, &(p_src->doc_pos), "map expected a list argument following the function\n");
 
-		p_tmp = linear_allocator_alloc(p_alloc, sizeof(struct ast_node));
+		p_tmp = cop_salloc(p_alloc, sizeof(struct ast_node), 0);
 		p_tmp->cls                     = &AST_CLS_LIST_GENERATOR;
 		p_tmp->doc_pos                 = p_src->doc_pos;
 		p_tmp->d.lgen.pp_stack         = pp_stackx;
@@ -1404,11 +1399,11 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		struct ast_node *p_ret;
 		size_t save;
 		
-		if ((p_ret = linear_allocator_alloc(p_alloc, sizeof(struct ast_node))) == NULL)
+		if ((p_ret = cop_salloc(p_alloc, sizeof(struct ast_node), 0)) == NULL)
 			return ejson_error_null(p_error_handler, "out of memory\n");
 		p_ret->doc_pos = p_src->doc_pos;
 
-		save        = linear_allocator_save(p_alloc);
+		save = cop_salloc_save(p_alloc);
 
 		if ((p_lhs = evaluate_ast(p_src->d.binop.p_lhs, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
 			return NULL;
@@ -1463,7 +1458,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 			else
 				return NULL;
 
-			linear_allocator_restore(p_alloc, save);
+			cop_salloc_restore(p_alloc, save);
 
 			if (p_src->cls == &AST_CLS_ADD) {
 				p_ret->cls = &AST_CLS_LITERAL_FLOAT;
@@ -1508,7 +1503,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 			lhs = p_lhs->d.i;
 			rhs = p_rhs->d.i;
 
-			linear_allocator_restore(p_alloc, save);
+			cop_salloc_restore(p_alloc, save);
 
 			if (p_src->cls == &AST_CLS_ADD) {
 				p_ret->cls = &AST_CLS_LITERAL_INT;
@@ -1560,7 +1555,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 }
 
 
-static int jnode_list_get_element(struct jnode *p_dest, void *ctx, struct linear_allocator *p_alloc, unsigned idx) {
+static int jnode_list_get_element(struct jnode *p_dest, void *ctx, struct cop_salloc_iface *p_alloc, unsigned idx) {
 	struct execution_context *ec   = ctx;
 	const struct ast_node *p_tmp;
 
@@ -1578,7 +1573,7 @@ enumerate_dict_keys2
 	,const struct dictnode            *p_node
 	,const struct ast_node           **pp_stack
 	,unsigned                          stack_size
-	,struct linear_allocator          *p_alloc
+	,struct cop_salloc_iface                *p_alloc
 	,void                             *p_userctx
 	) {
 	unsigned               i;
@@ -1599,7 +1594,7 @@ enumerate_dict_keys2
 	/* This is very important. The lifetime of the objects provided in the
 	 * enumeration is only for the life of the callback. The lifetime of the
 	 * string, however, persists. */
-	save = linear_allocator_save(p_alloc);
+	save = cop_salloc_save(p_alloc);
 
 	if ((p_eval = evaluate_ast(p_node->data2, pp_stack, stack_size, p_alloc, p_error_handler)) == NULL)
 		return -1;
@@ -1608,19 +1603,19 @@ enumerate_dict_keys2
 
 	ret = p_fn(&tmp, (const char *)(p_node + 1), p_userctx);
 
-	linear_allocator_restore(p_alloc, save);
+	cop_salloc_restore(p_alloc, save);
 
 	return ret;
 }
 
-static int enumerate_dict_keys(jdict_enumerate_fn *p_fn, void *p_ctx, struct linear_allocator *p_alloc, void *p_userctx) {
+static int enumerate_dict_keys(jdict_enumerate_fn *p_fn, void *p_ctx, struct cop_salloc_iface *p_alloc, void *p_userctx) {
 	struct execution_context *ec = p_ctx;
 	if (ec->p_object->d.rdict.p_root != NULL)
 		return enumerate_dict_keys2(p_fn, ec->p_error_handler, ec->p_object->d.rdict.p_root, ec->p_object->d.rdict.pp_stack, ec->p_object->d.rdict.stack_size, p_alloc, p_userctx);
 	return 0;
 }
 
-static int jnode_get_dict_element(struct jnode *p_dest, void *p_ctx, struct linear_allocator *p_alloc, const char *p_key) {
+static int jnode_get_dict_element(struct jnode *p_dest, void *p_ctx, struct cop_salloc_iface *p_alloc, const char *p_key) {
 	struct execution_context *ec = p_ctx;
 	struct dictnode *dn = rdict_find(ec->p_object->d.rdict.p_root, p_key);
 	const struct ast_node *prval;
@@ -1632,7 +1627,7 @@ static int jnode_get_dict_element(struct jnode *p_dest, void *p_ctx, struct line
 	return to_jnode(p_dest, prval, p_alloc, ec->p_error_handler);
 }
 
-static int to_jnode(struct jnode *p_node, const struct ast_node *p_ast, struct linear_allocator *p_alloc, const struct ejson_error_handler *p_error_handler) {
+static int to_jnode(struct jnode *p_node, const struct ast_node *p_ast, struct cop_salloc_iface *p_alloc, const struct ejson_error_handler *p_error_handler) {
 	struct execution_context *p_ec;
 
 	if (p_ast->cls == &AST_CLS_LITERAL_INT) {
@@ -1664,7 +1659,7 @@ static int to_jnode(struct jnode *p_node, const struct ast_node *p_ast, struct l
 		return 0;
 	}
 
-	if ((p_ec = linear_allocator_alloc(p_alloc, sizeof(struct execution_context))) == NULL)
+	if ((p_ec = cop_salloc(p_alloc, sizeof(struct execution_context), 0)) == NULL)
 		return ejson_error(p_error_handler, "out of memory\n");
 
 	p_ec->p_error_handler       = p_error_handler;
@@ -1704,7 +1699,7 @@ int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace,
 		if (p_token->cls != &TOK_IDENTIFIER)
 			return ejson_location_error(p_error_handler, &(p_token->posinfo), "expected an identifier\n");
 		cop_strh_init_shallow(&ident, p_token->t.strident.str);
-		if ((p_wsnode = linear_allocator_alloc(&(p_workspace->alloc), sizeof(struct ast_node) + ident.len + 1)) == NULL)
+		if ((p_wsnode = cop_salloc(p_workspace->p_alloc, sizeof(struct ast_node) + ident.len + 1, 0)) == NULL)
 			return ejson_error(p_error_handler, "out of memory\n");
 		memcpy((char *)(p_wsnode + 1), p_token->t.strident.str, ident.len + 1);
 		ident.ptr = (unsigned char *)(p_wsnode + 1);
@@ -1729,9 +1724,9 @@ int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace,
 #if 0
 	p_obj->cls->debug_print(p_obj, stdout, 0);
 #endif
-	if ((p_root = evaluate_ast(p_obj, NULL, 0, &(p_workspace->alloc), p_error_handler)) == NULL)
+	if ((p_root = evaluate_ast(p_obj, NULL, 0, p_workspace->p_alloc, p_error_handler)) == NULL)
 		return 1;
-	if (to_jnode(p_node, p_root, &(p_workspace->alloc), p_error_handler))
+	if (to_jnode(p_node, p_root, p_workspace->p_alloc, p_error_handler))
 		return 1;
 	return 0;
 }

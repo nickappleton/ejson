@@ -4,8 +4,7 @@
 #include "ejson_iface.h"
 #include <stdarg.h>
 #include "cop/cop_strdict.h"
-
-
+#include "cop/cop_alloc.h"
 
 struct token_pos_info {
 	const char           *p_line;
@@ -21,12 +20,12 @@ struct ejson_error_handler {
 
 struct evaluation_context {
 	struct cop_strdict_node *p_workspace;
-	struct linear_allocator  alloc;
+	struct cop_salloc_iface *p_alloc;
 	unsigned                 stack_depth;
 
 };
 
-void evaluation_context_init(struct evaluation_context *p_ctx);
+void evaluation_context_init(struct evaluation_context *p_ctx, struct cop_salloc_iface *p_alloc);
 int ejson_load(struct jnode *p_node, struct evaluation_context *p_workspace, const char *p_document, struct ejson_error_handler *p_error_handler);
 
 #endif /* EJSON_H */

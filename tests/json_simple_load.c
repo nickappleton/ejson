@@ -14,14 +14,14 @@ struct jdictnode {
 	struct cop_strdict_node node;
 };
 
-static int eat_remaining_string(const char **pp_buf, struct linear_allocator *p_alloc, const char **pp_str) {
+static int eat_remaining_string(const char **pp_buf, struct cop_salloc_iface *p_alloc, const char **pp_str) {
 	const char *p_buf = *pp_buf;
 	char       *p_str;
 	size_t      len;
 	for (len = 0; p_buf[len] != '\"'; len++)
 		if (p_buf[len] == '\0')
 			return -1;
-	if ((p_str = linear_allocator_alloc_align(p_alloc, 1, len + 1)) == NULL)
+	if ((p_str = cop_salloc(p_alloc, len + 1, 1)) == NULL)
 		return -1;
 	memcpy(p_str, p_buf, len);
 	p_str[len] = 0;
@@ -31,20 +31,20 @@ static int eat_remaining_string(const char **pp_buf, struct linear_allocator *p_
 	return 0;
 }
 
-static int expect_string(const char **pp_buf, const char **pp_str, struct linear_allocator *p_alloc) {
+static int expect_string(const char **pp_buf, const char **pp_str, struct cop_salloc_iface *p_alloc) {
 	return expect_char(pp_buf, '\"') || eat_remaining_string(pp_buf, p_alloc, pp_str);
 }
 
-static int get_list_element(struct jnode *p_dest, void *p_ctx, struct linear_allocator *p_alloc, unsigned idx) {
+static int get_list_element(struct jnode *p_dest, void *p_ctx, struct cop_salloc_iface *p_alloc, unsigned idx) {
 	*p_dest = ((struct jnode *)p_ctx)[idx];
 	return 0;
 }
 
-static struct jdictnode *initdictnode(const char *p_str, struct linear_allocator *p_alloc) {
+static struct jdictnode *initdictnode(const char *p_str, struct cop_salloc_iface *p_alloc) {
 	struct jdictnode *p_ret;
 	struct cop_strh key;
 	cop_strh_init_shallow(&key, p_str);
-	p_ret = linear_allocator_alloc(p_alloc, sizeof(struct jdictnode) + key.len + 1);
+	p_ret = cop_salloc(p_alloc, sizeof(struct jdictnode) + key.len + 1, 0);
 	if (p_ret != NULL) {
 		memcpy((char *)(p_ret + 1), p_str, key.len + 1);
 		key.ptr = (void *)(p_ret + 1);
@@ -54,7 +54,7 @@ static struct jdictnode *initdictnode(const char *p_str, struct linear_allocator
 }
 
 struct jenum_ctx {
-	struct linear_allocator *p_alloc;
+	struct cop_salloc_iface *p_alloc;
 	void                    *p_userctx;
 	jdict_enumerate_fn      *p_fn;
 
@@ -62,17 +62,17 @@ struct jenum_ctx {
 
 static int dict_enumerate_sub(void *p_context, struct cop_strdict_node *p_node, int depth) {
 	struct jenum_ctx *p_ctx = p_context;
-	size_t            save = linear_allocator_save(p_ctx->p_alloc);
+	size_t            save = cop_salloc_save(p_ctx->p_alloc);
 	struct jdictnode *p_data = cop_strdict_node_to_data(p_node);
 	struct cop_strh   key;
 	cop_strdict_node_to_key(p_node, &key);
 	if (p_ctx->p_fn(&(p_data->data), (char *)key.ptr, p_ctx->p_userctx))
 		return 1;
-	linear_allocator_restore(p_ctx->p_alloc, save);
+	cop_salloc_restore(p_ctx->p_alloc, save);
 	return 0;
 }
 
-static int dict_enumerate(jdict_enumerate_fn *p_fn, void *p_ctx, struct linear_allocator *p_alloc, void *p_userctx) {
+static int dict_enumerate(jdict_enumerate_fn *p_fn, void *p_ctx, struct cop_salloc_iface *p_alloc, void *p_userctx) {
 	struct jenum_ctx ctx;
 	struct cop_strdict_node *p_root = p_ctx;
 	ctx.p_userctx = p_userctx;
@@ -87,7 +87,7 @@ static int dict_enumerate(jdict_enumerate_fn *p_fn, void *p_ctx, struct linear_a
 }
 
 /* <0 for error >0 for not found 0 for found. */
-static int dict_get_by_key(struct jnode *p_dest, void *ctx, struct linear_allocator *p_alloc, const char *p_key) {
+static int dict_get_by_key(struct jnode *p_dest, void *ctx, struct cop_salloc_iface *p_alloc, const char *p_key) {
 	struct cop_strdict_node *p_root = ctx;
 	struct jdictnode        *data;
 	if (cop_strdict_get_by_cstr(&p_root, p_key, (void **)&data))
@@ -96,7 +96,7 @@ static int dict_get_by_key(struct jnode *p_dest, void *ctx, struct linear_alloca
 	return 0;
 }
 
-static int expect_object(const char **pp_buf, struct jnode *p_root, struct linear_allocator *p_alloc, struct linear_allocator *p_temps) {
+static int expect_object(const char **pp_buf, struct jnode *p_root, struct cop_salloc_iface *p_alloc, struct cop_salloc_iface *p_temps) {
 	if (!expect_consecutive(pp_buf, "true")) {
 		p_root->cls = JNODE_CLS_BOOL;
 		p_root->d.int_bool = 1;
@@ -115,13 +115,13 @@ static int expect_object(const char **pp_buf, struct jnode *p_root, struct linea
 		if (eat_whitespace(pp_buf), expect_char(pp_buf, ']')) {
 			struct jlistelem *p_head  = NULL;
 			struct jlistelem *p_last  = NULL;
-			size_t            savepos = linear_allocator_save(p_temps);
+			size_t            savepos = cop_salloc_save(p_temps);
 			unsigned          i;
 			while (1) {
 				struct jlistelem *elem;
 				if (is_eof(pp_buf))
 					return -1;
-				if ((elem = linear_allocator_alloc(p_temps, sizeof(struct jlistelem))) == NULL)
+				if ((elem = cop_salloc(p_temps, sizeof(struct jlistelem), 0)) == NULL)
 					return -1;
 				if (expect_object(pp_buf, &(elem->node), p_alloc, p_temps))
 					return -1;
@@ -142,13 +142,13 @@ static int expect_object(const char **pp_buf, struct jnode *p_root, struct linea
 					return -1;
 				break;
 			}
-			if ((p_list = linear_allocator_alloc(p_alloc, sizeof(struct jnode) * nb_elements)) == NULL)
+			if ((p_list = cop_salloc(p_alloc, sizeof(struct jnode) * nb_elements, 0)) == NULL)
 				return -1; /* oom */
 			for (i = 0; i < nb_elements; i++) {
 				p_list[i] = p_head->node;
 				p_head    = p_head->p_next;
 			}
-			linear_allocator_restore(p_temps, savepos);
+			cop_salloc_restore(p_temps, savepos);
 		}
 		p_root->cls                  = JNODE_CLS_LIST;
 		p_root->d.list.nb_elements   = nb_elements;
@@ -229,7 +229,7 @@ static int expect_object(const char **pp_buf, struct jnode *p_root, struct linea
 	return 0;
 }
 
-int parse_json(struct jnode *p_root, struct linear_allocator *p_alloc, struct linear_allocator *p_temps, const char *p_json) {
+int parse_json(struct jnode *p_root, struct cop_salloc_iface *p_alloc, struct cop_salloc_iface *p_temps, const char *p_json) {
 	eat_whitespace(&p_json);
 	if (expect_object(&p_json, p_root, p_alloc, p_temps))
 		return -1;

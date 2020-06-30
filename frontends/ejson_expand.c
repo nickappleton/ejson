@@ -1,5 +1,6 @@
 #include "ejson/ejson.h"
 #include "ejson/json_iface_utils.h"
+#include <stdio.h>
 
 static void on_parser_error(void *p_context, const struct token_pos_info *p_location, const char *p_format, va_list args) {
 	if (p_location != NULL) {
@@ -50,12 +51,17 @@ int main(int argc, char *argv[]) {
 		struct jnode dut;
 		struct evaluation_context ws;
 		struct ejson_error_handler err;
-		struct linear_allocator alloc;
+		struct cop_salloc_iface alloc;
+		struct cop_alloc_grp_temps mem;
 
 		err.on_parser_error = on_parser_error;
 		err.p_context = NULL;
 
-		evaluation_context_init(&ws);
+		if (cop_alloc_grp_temps_init(&mem, &alloc, 1024, 1024*1024, 16)) {
+			abort();
+		}
+
+		evaluation_context_init(&ws, &alloc);
 
 		if ((data = load_text_to_memory(argv[1])) == NULL) {
 			fprintf(stderr, "failed to load file\n");
