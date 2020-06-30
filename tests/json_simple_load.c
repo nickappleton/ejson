@@ -48,7 +48,7 @@ static struct jdictnode *initdictnode(const char *p_str, struct cop_salloc_iface
 	if (p_ret != NULL) {
 		memcpy((char *)(p_ret + 1), p_str, key.len + 1);
 		key.ptr = (void *)(p_ret + 1);
-		cop_strdict_setup(&(p_ret->node), &key, p_ret);
+		cop_strdict_node_init(&(p_ret->node), &key, p_ret);
 	}
 	return p_ret;
 }

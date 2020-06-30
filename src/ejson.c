@@ -792,7 +792,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 					return ejson_error_null(p_error_handler, "out of memory\n");
 				memcpy((char *)(p_wsnode + 1), p_token->t.strident.str, argnames[nb_args].len + 1);
 				argnames[nb_args].ptr = (unsigned char *)(p_wsnode + 1);
-				cop_strdict_setup(p_wsnode, &(argnames[nb_args]), p_arg);
+				cop_strdict_node_init(p_wsnode, &(argnames[nb_args]), p_arg);
 				if (cop_strdict_insert(&(p_workspace->p_workspace), p_wsnode))
 					return ejson_location_error_null(p_error_handler, &identpos, "function parameter names may only appear once and must alias workspace variables\n");
 				if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
@@ -1137,7 +1137,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 				return ejson_error_null(p_error_handler, "out of memory\n");
 			memcpy(p_dn + 1, key.ptr, key.len + 1);
 			key.ptr = (unsigned char *)(p_dn + 1);
-			cop_strdict_setup(&(p_dn->node), &key, p_dn);
+			cop_strdict_node_init(&(p_dn->node), &key, p_dn);
 			p_dn->data = p_src->d.ldict.elements[2*i+1];
 
 			if (cop_strdict_insert(&p_root, &(p_dn->node)))
@@ -1662,7 +1662,7 @@ int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace,
 			return 1;
 		if (p_token->cls != &TOK_SEMI)
 			return ejson_location_error(p_error_handler, &(p_token->posinfo), "expected ';'\n");
-		cop_strdict_setup(p_wsnode, &ident, (void *)p_obj);
+		cop_strdict_node_init(p_wsnode, &ident, (void *)p_obj);
 		if (cop_strdict_insert(&(p_workspace->p_workspace), p_wsnode))
 			return ejson_error(p_error_handler, "cannot redefine variable '%s'\n", ident.ptr);
 	}
