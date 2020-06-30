@@ -82,7 +82,6 @@ struct ast_node {
 		double                      f; /* AST_CLS_LITERAL_FLOAT */
 		struct {
 			uint_fast32_t           len;
-			uint_fast32_t           hash;
 			const char             *p_data;
 		} str; /* AST_CLS_LITERAL_STRING */
 		struct {
@@ -123,10 +122,10 @@ struct ast_node {
 		} access;
 
 		struct {
-			const struct ast_node **pp_stack;
-			unsigned                stack_size;
-			unsigned                nb_keys;
-			struct dictnode        *p_root;
+			const struct ast_node  **pp_stack;
+			unsigned                 stack_size;
+			unsigned                 nb_keys;
+			struct cop_strdict_node *p_root;
 		} rdict;
 		struct {
 			const struct ast_node **pp_stack;
@@ -153,41 +152,10 @@ struct ast_node {
 
 };
 
-struct dictnode;
-
-#define DICTNODE_BITS (2)
-#define DICTNODE_NUM  (1u << DICTNODE_BITS)
-#define DICTNODE_MASK (DICTNODE_NUM - 1u)
-
 struct dictnode {
-	const struct ast_node *data2; /* Unevaluated nodes */
-	struct dictnode       *p_children[DICTNODE_NUM];
-	uint_fast32_t          key;
+	struct cop_strdict_node  node;
+	const struct ast_node   *data; /* Unevaluated nodes */
 };
-
-static size_t hashfnv(const char *p_str, uint_fast32_t *p_hash) {
-	uint_fast32_t hash = 2166136261;
-	uint_fast32_t c;
-	size_t        length = 0;
-	while ((c = p_str[length++]) != 0)
-		hash = ((hash ^ c) * 16777619) & 0xFFFFFFFFu;
-	*p_hash = hash;
-	return length;
-}
-
-struct dictnode *rdict_find(struct dictnode *p_root, const char *p_string) {
-	uint_fast32_t hash, ukey;
-	size_t len;
-	len  = hashfnv(p_string, &hash);
-	ukey = hash;
-	while (p_root != NULL) {
-		if (p_root->key == hash && !strcmp((const char *)(p_root + 1), p_string))
-			return p_root;
-		p_root = p_root->p_children[ukey & DICTNODE_MASK];
-		ukey >>= DICTNODE_BITS;
-	}
-	return NULL;
-}
 
 #define TOK_DECL(name_, precedence_, right_associative_, binop_ast_cls_) \
 	static const struct tok_def name_ = {#name_, precedence_, right_associative_, binop_ast_cls_}
@@ -703,7 +671,6 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 			return ejson_error_null(p_error_handler, "out of memory\n");
 		memcpy(p_strbuf, p_token->t.strident.str, sl + 1);
 		p_ret->cls          = &AST_CLS_LITERAL_STRING;
-		p_ret->d.str.hash   = 0;
 		p_ret->d.str.len    = sl;
 		p_ret->d.str.p_data = p_strbuf;
 	} else if (p_token->cls == &TOK_LBRACE) {
@@ -1144,47 +1111,37 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		p_ret->cls          = &AST_CLS_LITERAL_STRING;
 		p_ret->doc_pos      = p_src->doc_pos;
 		p_ret->d.str.p_data = ob;
-		p_ret->d.str.len    = hashfnv(ob, &(p_ret->d.str.hash));
+		p_ret->d.str.len    = i;
 		return p_ret;
 	}
 
 	if  (p_src->cls == &AST_CLS_LITERAL_DICT) {
 		struct ast_node *p_ret;
 		unsigned i;
-		struct dictnode *p_root = NULL;
+		struct cop_strdict_node *p_root = cop_strdict_init();
 
 		/* Build the dictionary */
 		for (i = 0; i < p_src->d.ldict.nb_keys; i++) {
-			struct dictnode **pp_ipos = &p_root;
-			struct dictnode  *p_iter = *pp_ipos;
-			uint_fast32_t hash, ukey;
-			size_t len;
-
 			const struct ast_node *p_key;
+			struct cop_strh key;
+			struct dictnode *p_dn;
 			
 			if ((p_key = evaluate_ast(p_src->d.ldict.elements[2*i+0], pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
 				return NULL;
 			if (p_key->cls != &AST_CLS_LITERAL_STRING)
 				return ejson_location_error_null(p_error_handler, &(p_src->doc_pos), "a key expression in the dictionary did not evaluate to a string\n");
 
-			len  = hashfnv(p_key->d.str.p_data, &hash);
-			ukey = hash;
-			while (p_iter != NULL) {
-				if (p_iter->key == hash && !strcmp((const char *)(p_iter + 1), p_key->d.str.p_data))
-					return ejson_error_null(p_error_handler, "attempted to add a key to a dictionary that already existed (%s)\n", p_key->d.str.p_data);
-				pp_ipos = &(p_iter->p_children[ukey & DICTNODE_MASK]);
-				p_iter = *pp_ipos;
-				ukey >>= DICTNODE_BITS;
-			}
-
-			if ((p_iter = cop_salloc(p_alloc, sizeof(struct dictnode) + len + 1, 0)) == NULL)
+			/* fixme: there is no need to keep another copy of the string. ideally, we would have a separate stack as we don't need to keep hold of the above node and all memory that was needed to figure it out */
+			cop_strh_init_shallow(&key, p_key->d.str.p_data);
+			if ((p_dn = cop_salloc(p_alloc, sizeof(struct dictnode) + key.len + 1, 0)) == NULL)
 				return ejson_error_null(p_error_handler, "out of memory\n");
-			p_iter->data2 = p_src->d.ldict.elements[2*i+1];
-			p_iter->key  = hash;
-			memset(p_iter->p_children, 0, sizeof(p_iter->p_children));
-			memcpy((char *)(p_iter + 1), p_key->d.str.p_data, len + 1);
+			memcpy(p_dn + 1, key.ptr, key.len + 1);
+			key.ptr = (unsigned char *)(p_dn + 1);
+			cop_strdict_setup(&(p_dn->node), &key, p_dn);
+			p_dn->data = p_src->d.ldict.elements[2*i+1];
 
-			*pp_ipos = p_iter;
+			if (cop_strdict_insert(&p_root, &(p_dn->node)))
+				return ejson_error_null(p_error_handler, "attempted to add a key to a dictionary that already existed (%s)\n", p_key->d.str.p_data);
 		}
 
 		if ((p_ret = cop_salloc(p_alloc, sizeof(struct ast_node), 0)) == NULL)
@@ -1222,9 +1179,9 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 				return NULL;
 			if (p_key->cls != &AST_CLS_LITERAL_STRING)
 				return ejson_location_error_null(p_error_handler, &(p_src->d.access.p_key->doc_pos), "the key expression for dict access did not evaluate to a string\n");
-			if ((p_node = rdict_find(p_list->d.rdict.p_root, p_key->d.str.p_data)) == NULL)
+			if (cop_strdict_get_by_cstr(&(p_list->d.rdict.p_root), p_key->d.str.p_data, (void **)&p_node))
 				return ejson_location_error_null(p_error_handler, &(p_src->d.access.p_key->doc_pos), "key '%s' not in dict\n", p_key->d.str.p_data);
-			return evaluate_ast(p_node->data2, pp_stackx, stack_sizex, p_alloc, p_error_handler);
+			return evaluate_ast(p_node->data, pp_stackx, stack_sizex, p_alloc, p_error_handler);
 		}
 
 		return ejson_error_null(p_error_handler, "the list expression for access did not evaluate to a list\n");
@@ -1565,63 +1522,55 @@ static int jnode_list_get_element(struct jnode *p_dest, void *ctx, struct cop_sa
 	return to_jnode(p_dest, p_tmp, p_alloc, ec->p_error_handler);
 }
 
-static
-int
-enumerate_dict_keys2
-	(jdict_enumerate_fn               *p_fn
-	,const struct ejson_error_handler *p_error_handler
-	,const struct dictnode            *p_node
-	,const struct ast_node           **pp_stack
-	,unsigned                          stack_size
-	,struct cop_salloc_iface                *p_alloc
-	,void                             *p_userctx
-	) {
-	unsigned               i;
-	struct jnode           tmp;
-	const struct ast_node *p_eval;
+struct enum_args {
+	const struct ejson_error_handler  *p_handler;
+	const struct ast_node            **pp_stack;
+	unsigned                           stack_size;
+	struct cop_salloc_iface           *p_alloc;
+	void                              *p_user_context;
+	jdict_enumerate_fn                *p_fn;
+
+};
+
+static int enumerate_dict_keys2(void *p_context, struct cop_strdict_node *p_node, int depth) {
+	struct enum_args      *p_eargs = p_context;
+	struct dictnode       *p_dn;
 	size_t                 save;
+	struct cop_strh        key;
+	const struct ast_node *p_eval;
+	struct jnode           tmp;
 	int                    ret;
-
-	for (i = 0; i < DICTNODE_NUM; i++) {
-		if (p_node->p_children[i] != NULL) {
-			int r;
-			if ((r = enumerate_dict_keys2(p_fn, p_error_handler, p_node->p_children[i], pp_stack, stack_size, p_alloc, p_userctx)) != 0) {
-				return r;
-			}
-		}
-	}
-
-	/* This is very important. The lifetime of the objects provided in the
-	 * enumeration is only for the life of the callback. The lifetime of the
-	 * string, however, persists. */
-	save = cop_salloc_save(p_alloc);
-
-	if ((p_eval = evaluate_ast(p_node->data2, pp_stack, stack_size, p_alloc, p_error_handler)) == NULL)
+	p_dn = cop_strdict_node_to_data(p_node);
+	cop_strdict_node_to_key(p_node, &key);
+	save = cop_salloc_save(p_eargs->p_alloc);
+	if ((p_eval = evaluate_ast(p_dn->data, p_eargs->pp_stack, p_eargs->stack_size, p_eargs->p_alloc, p_eargs->p_handler)) == NULL)
 		return -1;
-	if (to_jnode(&tmp, p_eval, p_alloc, p_error_handler))
+	if (to_jnode(&tmp, p_eval, p_eargs->p_alloc, p_eargs->p_handler))
 		return -1;
-
-	ret = p_fn(&tmp, (const char *)(p_node + 1), p_userctx);
-
-	cop_salloc_restore(p_alloc, save);
-
+	ret = p_eargs->p_fn(&tmp, (char *)key.ptr, p_eargs->p_user_context);
+	cop_salloc_restore(p_eargs->p_alloc, save);
 	return ret;
 }
 
 static int enumerate_dict_keys(jdict_enumerate_fn *p_fn, void *p_ctx, struct cop_salloc_iface *p_alloc, void *p_userctx) {
 	struct execution_context *ec = p_ctx;
-	if (ec->p_object->d.rdict.p_root != NULL)
-		return enumerate_dict_keys2(p_fn, ec->p_error_handler, ec->p_object->d.rdict.p_root, ec->p_object->d.rdict.pp_stack, ec->p_object->d.rdict.stack_size, p_alloc, p_userctx);
-	return 0;
+	struct enum_args eargs;
+	eargs.p_handler      = ec->p_error_handler;
+	eargs.pp_stack       = ec->p_object->d.rdict.pp_stack;
+	eargs.stack_size     = ec->p_object->d.rdict.stack_size;
+	eargs.p_alloc        = p_alloc;
+	eargs.p_user_context = p_userctx;
+	eargs.p_fn           = p_fn;
+	return cop_strdict_enumerate(&(ec->p_object->d.rdict.p_root), enumerate_dict_keys2, &eargs);
 }
 
 static int jnode_get_dict_element(struct jnode *p_dest, void *p_ctx, struct cop_salloc_iface *p_alloc, const char *p_key) {
 	struct execution_context *ec = p_ctx;
-	struct dictnode *dn = rdict_find(ec->p_object->d.rdict.p_root, p_key);
-	const struct ast_node *prval;
-	if (dn == NULL)
+	struct dictnode          *dn;
+	const struct ast_node    *prval;
+	if (cop_strdict_get_by_cstr(&(ec->p_object->d.rdict.p_root), p_key, (void **)&dn))
 		return 1; /* Not found */
-	prval = evaluate_ast(dn->data2, ec->p_object->d.rdict.pp_stack, ec->p_object->d.rdict.stack_size, p_alloc, ec->p_error_handler);
+	prval = evaluate_ast(dn->data, ec->p_object->d.rdict.pp_stack, ec->p_object->d.rdict.stack_size, p_alloc, ec->p_error_handler);
 	if (prval == NULL)
 		return -1; /* Error */
 	return to_jnode(p_dest, prval, p_alloc, ec->p_error_handler);
