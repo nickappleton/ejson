@@ -74,13 +74,12 @@ static int dict_enumerate_sub(void *p_context, struct cop_strdict_node *p_node, 
 
 static int dict_enumerate(jdict_enumerate_fn *p_fn, void *p_ctx, struct cop_salloc_iface *p_alloc, void *p_userctx) {
 	struct jenum_ctx ctx;
-	struct cop_strdict_node *p_root = p_ctx;
 	ctx.p_userctx = p_userctx;
 	ctx.p_alloc = p_alloc;
 	ctx.p_fn = p_fn;
 	return
 		cop_strdict_enumerate
-			(&p_root
+			((struct cop_strdict_node *)p_ctx
 			,dict_enumerate_sub
 			,&ctx
 			);
@@ -88,9 +87,8 @@ static int dict_enumerate(jdict_enumerate_fn *p_fn, void *p_ctx, struct cop_sall
 
 /* <0 for error >0 for not found 0 for found. */
 static int dict_get_by_key(struct jnode *p_dest, void *ctx, struct cop_salloc_iface *p_alloc, const char *p_key) {
-	struct cop_strdict_node *p_root = ctx;
-	struct jdictnode        *data;
-	if (cop_strdict_get_by_cstr(&p_root, p_key, (void **)&data))
+	struct jdictnode *data;
+	if (cop_strdict_get_by_cstr((struct cop_strdict_node *)ctx, p_key, (void **)&data))
 		return 1;
 	*p_dest = data->data;
 	return 0;

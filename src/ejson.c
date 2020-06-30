@@ -636,7 +636,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 
 	if (p_token->cls == &TOK_IDENTIFIER) {
 		const struct ast_node *node;
-		if (cop_strdict_get_by_cstr(&(p_workspace->p_workspace), p_token->t.strident.str, (void **)&node))
+		if (cop_strdict_get_by_cstr(p_workspace->p_workspace, p_token->t.strident.str, (void **)&node))
 			return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "'%s' was not found in the workspace\n", p_token->t.strident.str);
 		assert(node != NULL);
 		return node;
@@ -1179,7 +1179,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 				return NULL;
 			if (p_key->cls != &AST_CLS_LITERAL_STRING)
 				return ejson_location_error_null(p_error_handler, &(p_src->d.access.p_key->doc_pos), "the key expression for dict access did not evaluate to a string\n");
-			if (cop_strdict_get_by_cstr(&(p_list->d.rdict.p_root), p_key->d.str.p_data, (void **)&p_node))
+			if (cop_strdict_get_by_cstr(p_list->d.rdict.p_root, p_key->d.str.p_data, (void **)&p_node))
 				return ejson_location_error_null(p_error_handler, &(p_src->d.access.p_key->doc_pos), "key '%s' not in dict\n", p_key->d.str.p_data);
 			return evaluate_ast(p_node->data, pp_stackx, stack_sizex, p_alloc, p_error_handler);
 		}
@@ -1561,14 +1561,14 @@ static int enumerate_dict_keys(jdict_enumerate_fn *p_fn, void *p_ctx, struct cop
 	eargs.p_alloc        = p_alloc;
 	eargs.p_user_context = p_userctx;
 	eargs.p_fn           = p_fn;
-	return cop_strdict_enumerate(&(ec->p_object->d.rdict.p_root), enumerate_dict_keys2, &eargs);
+	return cop_strdict_enumerate(ec->p_object->d.rdict.p_root, enumerate_dict_keys2, &eargs);
 }
 
 static int jnode_get_dict_element(struct jnode *p_dest, void *p_ctx, struct cop_salloc_iface *p_alloc, const char *p_key) {
 	struct execution_context *ec = p_ctx;
 	struct dictnode          *dn;
 	const struct ast_node    *prval;
-	if (cop_strdict_get_by_cstr(&(ec->p_object->d.rdict.p_root), p_key, (void **)&dn))
+	if (cop_strdict_get_by_cstr(ec->p_object->d.rdict.p_root, p_key, (void **)&dn))
 		return 1; /* Not found */
 	prval = evaluate_ast(dn->data, ec->p_object->d.rdict.pp_stack, ec->p_object->d.rdict.stack_size, p_alloc, ec->p_error_handler);
 	if (prval == NULL)
