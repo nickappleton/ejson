@@ -192,6 +192,21 @@ int main(int argc, char *argv[]) {
 		,"[1,-2,3.4,-4.5,5.6e2,-7.8e-2]"
 		,"numeric objects in a list"
 		);
+	tests++; errors += run_test
+		("[1,2,3,4]+[5,6,7]+[8,9,10]"
+		,"[1,2,3,4,5,6,7,8,9,10]"
+		,"list concatenation"
+		);
+	tests++; errors += run_test
+		("[1,2,3,4]+(range [5,8])+[9,10]"
+		,"[1,2,3,4,5,6,7,8,9,10]"
+		,"list concatenation incl. a range"
+		);
+	tests++; errors += run_test
+		("(call func[] [1,2,3,4] [])+(range [5,8])+[9,10]"
+		,"[1,2,3,4,5,6,7,8,9,10]"
+		,"list concatenation incl. a range and function"
+		);
 
 	/* extended hexadecimal numerics */
 	tests++; errors += run_test

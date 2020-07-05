@@ -144,6 +144,10 @@ struct ast_node {
 				struct {
 					const struct ast_node **pp_values;
 				} literal;
+				struct {
+					const struct ast_node *p_first;
+					const struct ast_node *p_second;
+				} cat;
 			} d;
 			uint_fast32_t     nb_elements;
 		} lgen; /* AST_CLS_LIST_GENERATOR */
@@ -948,6 +952,20 @@ const struct ast_node *get_literal_element_fn(const struct ast_node *p_src, unsi
 	return p_src;
 }
 
+const struct ast_node *get_list_cat(const struct ast_node *p_src, unsigned element, struct cop_salloc_iface *p_alloc, const struct ejson_error_handler *p_error_handler) {
+	const struct ast_node *p_first;
+	const struct ast_node *p_second;
+	assert(p_src->cls == &AST_CLS_LIST_GENERATOR);
+	p_first  = p_src->d.lgen.d.cat.p_first;
+	p_second = p_src->d.lgen.d.cat.p_second;
+	assert(p_first->cls == &AST_CLS_LIST_GENERATOR);
+	assert(p_second->cls == &AST_CLS_LIST_GENERATOR);
+	if (element < p_first->d.lgen.nb_elements)
+		return p_first->d.lgen.get_element(p_first, element, p_alloc, p_error_handler);
+	element -= p_first->d.lgen.nb_elements;
+	return p_second->d.lgen.get_element(p_second, element, p_alloc, p_error_handler);
+}
+
 const struct ast_node *ast_list_generator_map(const struct ast_node *p_src, unsigned element, struct cop_salloc_iface *p_alloc, const struct ejson_error_handler *p_error_handler) {
 	const struct ast_node *p_argument;
 	const struct ast_node **pp_tmp;
@@ -1394,6 +1412,19 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 				return ejson_location_error_null(p_error_handler, &p_src->doc_pos, "rhs must be boolean if lhs is\n");
 			p_ret->cls = &AST_CLS_LITERAL_BOOL;
 			p_ret->d.i = (p_src->cls == &AST_CLS_EQ) ? (!p_lhs->d.i == !p_rhs->d.i) : (p_lhs->d.i != p_rhs->d.i);
+			return p_ret;
+		}
+
+		if (p_src->cls == &AST_CLS_ADD && (p_lhs->cls == &AST_CLS_LIST_GENERATOR || p_rhs->cls == &AST_CLS_LIST_GENERATOR)) {
+			if (p_lhs->cls != p_rhs->cls)
+				return ejson_location_error_null(p_error_handler, &p_src->doc_pos, "expected lhs and rhs to both be lists\n");
+			p_ret->cls                   = &AST_CLS_LIST_GENERATOR;
+			p_ret->d.lgen.nb_elements    = p_lhs->d.lgen.nb_elements + p_rhs->d.lgen.nb_elements;
+			p_ret->d.lgen.pp_stack       = pp_stackx;
+			p_ret->d.lgen.stack_size     = stack_sizex;
+			p_ret->d.lgen.get_element    = get_list_cat;
+			p_ret->d.lgen.d.cat.p_first  = p_lhs;
+			p_ret->d.lgen.d.cat.p_second = p_rhs;
 			return p_ret;
 		}
 
