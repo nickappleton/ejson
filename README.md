@@ -22,13 +22,13 @@ There are 7 primtive types in EJSON:
 * dictionaries
 * lists
 * strings
-* number
+* real numbers
 * null
 * booleans (true/false)
+* integers
 * functions
 
-All expressions evaluate to one of these types. The first six of these types correspond to the regular JSON types. Because all EJSON documents must expand to something that can be represented using regular JSON, the main document expression must not expand to a function type.
-
+All expressions evaluate to one of these types. The first six of these types correspond to the regular JSON types. Integers will automatically be promoted to reals. The main document expression must not expand to a function type.
 
     expression = identifier
         | "(", expression, ")"
@@ -59,8 +59,31 @@ All expressions evaluate to one of these types. The first six of these types cor
     function-call = "call", expression, expression
 
     builtin = "range", expression
-        | "listval", expression, expression
+        | "access", expression, expression
         | "map", expression, expression
+
+## Operator precedence
+
+| Token | Operator     | Precedence | Description              |
+| ----- | ------------ | ---------- | ------------------------ |
+| or    | Left Binary  | 1          | Logical or               |
+| and   | Left Binary  | 2          | Logical and              |
+| not   | Unary        | 3          | Logical not              |
+| ==    | Left Binary  | 4          | Equal to                 |
+| !=    | Left Binary  | 4          | Not equal to             |
+| >     | Left Binary  | 5          | Greater than             |
+| >=    | Left Binary  | 5          | Greater than or equal to |
+| <     | Left Binary  | 5          | Less than                |
+| <=    | Left Binary  | 5          | Less than or equal to    |
+| \|    | Left Binary  | 6          | Bitwise or               |
+| &     | Left Binary  | 7          | Bitwise and              |
+| +     | Left Binary  | 8          | Addition                 |
+| -     | Left Binary  | 8          | Subtraction              |
+| *     | Left Binary  | 9          | Multiplication           |
+| /     | Left Binary  | 9          | Division                 |
+| %     | Left Binary  | 9          | Modulo                   |
+| -     | Unary        | 10         | Negation                 |
+| ^     | Right Binary | 11         | Exponentiation           |
 
 ## Range expression
 
@@ -140,15 +163,15 @@ A `format-expression` takes a single argument which must evaluate to a `list` co
     > format ["I am %d, you are %03d, I have a %s"] [10, 11, "cat"]
     "I am 10, you are 011, I have a cat"
 
-## listval expression
+## Access expression
 
-    listval-expression = "listval", expression, expression
+    access-expression = "access", expression, expression
 
-A `listval-expression` takes two arguments: a `list` and an `integer`. The expression evaluates to the element of the list at the zero-based index of the given integer. It is an error condition for the list index to be out of range.
+A `access-expression` takes two arguments: either a `list` and an `integer` or a `dictionary` and a `string`. If the first argument is a `list`, the expression evaluates to the element of the list at the zero-based index of the given integer. It is an error condition for the list index to be out of range. If the first argument is a `dictionary`, the expression evaluates to the value with the given key. It is an error condition for the key to not exist.
 
-    > listval ["cat", "dog", "wolf"] 1
+    > access ["cat", "dog", "wolf"] 1
     "dog"
-    > listval range [10] 4
+    > access range [10] 4
     4
 
 
