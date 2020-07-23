@@ -28,9 +28,11 @@ struct token;
 
 struct tok_def {
 	const char           *name;
-	int                   precedence;
+	int                   binary_precedence;
 	int                   right_associative;
 	const struct ast_cls *bin_op_cls;
+	const struct ast_cls *unary_op_cls;
+	int                   unary_precedence;
 };
 
 #ifndef ejson_error
@@ -161,8 +163,8 @@ struct dictnode {
 	const struct ast_node   *data; /* Unevaluated nodes */
 };
 
-#define TOK_DECL(name_, precedence_, right_associative_, binop_ast_cls_) \
-	static const struct tok_def name_ = {#name_, precedence_, right_associative_, binop_ast_cls_}
+#define TOK_DECL(name_, precedence_, right_associative_, binop_ast_cls_, unary_precedence_, unop_ast_cls_) \
+	static const struct tok_def name_ = {#name_, precedence_, right_associative_, binop_ast_cls_, unop_ast_cls_, unary_precedence_}
 
 static void debug_print_null(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
 	fprintf(p_f, "%*s%s\n", depth, "", p_node->cls->p_name);
@@ -244,6 +246,7 @@ DEF_AST_CLS(AST_CLS_LITERAL_DICT,    NULL, debug_print_dict);
 DEF_AST_CLS(AST_CLS_NEG,             NULL, debug_print_unop);
 DEF_AST_CLS(AST_CLS_BITAND,          NULL, debug_print_binop);
 DEF_AST_CLS(AST_CLS_BITOR,           NULL, debug_print_binop);
+DEF_AST_CLS(AST_CLS_LOGNOT,          NULL, debug_print_unop);
 DEF_AST_CLS(AST_CLS_LOGAND,          NULL, debug_print_binop);
 DEF_AST_CLS(AST_CLS_LOGOR,           NULL, debug_print_binop);
 DEF_AST_CLS(AST_CLS_ADD,             NULL, debug_print_binop);
@@ -271,55 +274,55 @@ DEF_AST_CLS(AST_CLS_LIST_GENERATOR,  NULL, debug_list_generator);
 DEF_AST_CLS(AST_CLS_READY_DICT,      NULL, debug_ready_dict);
 
 /* Numeric literals */
-TOK_DECL(TOK_INT,        -1, 0, NULL); /* 13123 */
-TOK_DECL(TOK_FLOAT,      -1, 0, NULL); /* 13123.0 | .123 */
+TOK_DECL(TOK_INT,        -1, 0, NULL, -1, NULL); /* 13123 */
+TOK_DECL(TOK_FLOAT,      -1, 0, NULL, -1, NULL); /* 13123.0 | .123 */
 
-/* Binary operators */
-TOK_DECL(TOK_LOGOR,       1, 0, &AST_CLS_LOGOR);  /* or */
-TOK_DECL(TOK_LOGAND,      2, 0, &AST_CLS_LOGAND); /* and */
-TOK_DECL(TOK_EQ,          3, 0, &AST_CLS_EQ);     /* == */
-TOK_DECL(TOK_NEQ,         3, 0, &AST_CLS_NEQ);    /* != */
-TOK_DECL(TOK_GT,          4, 0, &AST_CLS_GT);     /* > */
-TOK_DECL(TOK_GEQ,         4, 0, &AST_CLS_GEQ);    /* >= */
-TOK_DECL(TOK_LT,          4, 0, &AST_CLS_LT);     /* < */
-TOK_DECL(TOK_LEQ,         4, 0, &AST_CLS_LEQ);    /* <= */
-TOK_DECL(TOK_BITOR,       5, 0, &AST_CLS_BITOR);  /* | */
-TOK_DECL(TOK_BITAND,      6, 0, &AST_CLS_BITAND); /* & */
-TOK_DECL(TOK_ADD,         7, 0, &AST_CLS_ADD);    /* + */
-TOK_DECL(TOK_SUB,         7, 0, &AST_CLS_SUB);    /* - */
-TOK_DECL(TOK_MUL,         8, 0, &AST_CLS_MUL);    /* * */
-TOK_DECL(TOK_DIV,         8, 0, &AST_CLS_DIV);    /* / */
-TOK_DECL(TOK_MOD,         8, 0, &AST_CLS_MOD);    /* % */
-TOK_DECL(TOK_EXP,         9, 1, &AST_CLS_EXP);    /* ^ */
-
+/* Binary and unary operators */
+TOK_DECL(TOK_LOGOR,       1, 0, &AST_CLS_LOGOR,  -1, NULL);            /* or */
+TOK_DECL(TOK_LOGAND,      2, 0, &AST_CLS_LOGAND, -1, NULL);            /* and */
+TOK_DECL(TOK_LOGNOT,     -1, 0, NULL,             3, &AST_CLS_LOGNOT); /* not */
+TOK_DECL(TOK_EQ,          4, 0, &AST_CLS_EQ,     -1, NULL);            /* == */
+TOK_DECL(TOK_NEQ,         4, 0, &AST_CLS_NEQ,    -1, NULL);            /* != */
+TOK_DECL(TOK_GT,          5, 0, &AST_CLS_GT,     -1, NULL);            /* > */
+TOK_DECL(TOK_GEQ,         5, 0, &AST_CLS_GEQ,    -1, NULL);            /* >= */
+TOK_DECL(TOK_LT,          5, 0, &AST_CLS_LT,     -1, NULL);            /* < */
+TOK_DECL(TOK_LEQ,         5, 0, &AST_CLS_LEQ,    -1, NULL);            /* <= */
+TOK_DECL(TOK_BITOR,       6, 0, &AST_CLS_BITOR,  -1, NULL);            /* | */
+TOK_DECL(TOK_BITAND,      7, 0, &AST_CLS_BITAND, -1, NULL);            /* & */
+TOK_DECL(TOK_ADD,         8, 0, &AST_CLS_ADD,    -1, NULL);            /* + */
+TOK_DECL(TOK_SUB,         8, 0, &AST_CLS_SUB,    10, &AST_CLS_NEG);    /* - */
+TOK_DECL(TOK_MUL,         9, 0, &AST_CLS_MUL,    -1, NULL);            /* * */
+TOK_DECL(TOK_DIV,         9, 0, &AST_CLS_DIV,    -1, NULL);            /* / */
+TOK_DECL(TOK_MOD,         9, 0, &AST_CLS_MOD,    -1, NULL);            /* % */
+TOK_DECL(TOK_EXP,        11, 1, &AST_CLS_EXP,    -1, NULL);            /* ^ */
 
 /* String */
-TOK_DECL(TOK_STRING,     -1, 0, NULL); /* "afasfasf" */
+TOK_DECL(TOK_STRING,     -1, 0, NULL, -1, NULL); /* "afasfasf" */
 
 /* Keywords */
-TOK_DECL(TOK_NULL,       -1, 0, NULL); /* null */
-TOK_DECL(TOK_TRUE,       -1, 0, NULL); /* true */
-TOK_DECL(TOK_FALSE,      -1, 0, NULL); /* false */
-TOK_DECL(TOK_RANGE,      -1, 0, NULL); /* range */
-TOK_DECL(TOK_FUNC,       -1, 0, NULL); /* func */
-TOK_DECL(TOK_CALL,       -1, 0, NULL); /* call */
-TOK_DECL(TOK_DEFINE,     -1, 0, NULL); /* define */
-TOK_DECL(TOK_ACCESS,     -1, 0, NULL); /* access */
-TOK_DECL(TOK_MAP,        -1, 0, NULL); /* map */
-TOK_DECL(TOK_FORMAT,     -1, 0, NULL); /* format */
-TOK_DECL(TOK_IDENTIFIER, -1, 0, NULL); /* afasfasf - anything not a keyword */
+TOK_DECL(TOK_NULL,       -1, 0, NULL, -1, NULL); /* null */
+TOK_DECL(TOK_TRUE,       -1, 0, NULL, -1, NULL); /* true */
+TOK_DECL(TOK_FALSE,      -1, 0, NULL, -1, NULL); /* false */
+TOK_DECL(TOK_RANGE,      -1, 0, NULL, -1, NULL); /* range */
+TOK_DECL(TOK_FUNC,       -1, 0, NULL, -1, NULL); /* func */
+TOK_DECL(TOK_CALL,       -1, 0, NULL, -1, NULL); /* call */
+TOK_DECL(TOK_DEFINE,     -1, 0, NULL, -1, NULL); /* define */
+TOK_DECL(TOK_ACCESS,     -1, 0, NULL, -1, NULL); /* access */
+TOK_DECL(TOK_MAP,        -1, 0, NULL, -1, NULL); /* map */
+TOK_DECL(TOK_FORMAT,     -1, 0, NULL, -1, NULL); /* format */
+TOK_DECL(TOK_IDENTIFIER, -1, 0, NULL, -1, NULL); /* afasfasf - anything not a keyword */
 
 /* Symbols */
-TOK_DECL(TOK_COMMA,      -1, 0, NULL); /* , */
-TOK_DECL(TOK_LBRACE,     -1, 0, NULL); /* { */
-TOK_DECL(TOK_RBRACE,     -1, 0, NULL); /* } */
-TOK_DECL(TOK_LPAREN,     -1, 0, NULL); /* ( */
-TOK_DECL(TOK_RPAREN,     -1, 0, NULL); /* ) */
-TOK_DECL(TOK_LSQBR,      -1, 0, NULL); /* [ */
-TOK_DECL(TOK_RSQBR,      -1, 0, NULL); /* ] */
-TOK_DECL(TOK_ASSIGN,     -1, 0, NULL); /* = */
-TOK_DECL(TOK_COLON,      -1, 0, NULL); /* : */
-TOK_DECL(TOK_SEMI,       -1, 0, NULL); /* ; */
+TOK_DECL(TOK_COMMA,      -1, 0, NULL, -1, NULL); /* , */
+TOK_DECL(TOK_LBRACE,     -1, 0, NULL, -1, NULL); /* { */
+TOK_DECL(TOK_RBRACE,     -1, 0, NULL, -1, NULL); /* } */
+TOK_DECL(TOK_LPAREN,     -1, 0, NULL, -1, NULL); /* ( */
+TOK_DECL(TOK_RPAREN,     -1, 0, NULL, -1, NULL); /* ) */
+TOK_DECL(TOK_LSQBR,      -1, 0, NULL, -1, NULL); /* [ */
+TOK_DECL(TOK_RSQBR,      -1, 0, NULL, -1, NULL); /* ] */
+TOK_DECL(TOK_ASSIGN,     -1, 0, NULL, -1, NULL); /* = */
+TOK_DECL(TOK_COLON,      -1, 0, NULL, -1, NULL); /* : */
+TOK_DECL(TOK_SEMI,       -1, 0, NULL, -1, NULL); /* ; */
 
 struct tokeniser {
 	uint_fast32_t line_nb;
@@ -547,6 +550,7 @@ const struct token *tok_read(struct tokeniser *p_tokeniser, const struct ejson_e
 		} else if (!strcmp(p_temp->t.strident.str, "format")) { p_temp->cls = &TOK_FORMAT;
 		} else if (!strcmp(p_temp->t.strident.str, "and")) { p_temp->cls = &TOK_LOGAND;
 		} else if (!strcmp(p_temp->t.strident.str, "or")) { p_temp->cls = &TOK_LOGOR;
+		} else if (!strcmp(p_temp->t.strident.str, "not")) { p_temp->cls = &TOK_LOGNOT;
 		} else { p_temp->cls = &TOK_IDENTIFIER; }
 
 	} else if (c == '!' && nc == '=') {
@@ -617,7 +621,7 @@ void evaluation_context_init(struct evaluation_context *p_ctx, struct cop_salloc
 	p_ctx->p_workspace = cop_strdict_init();
 }
 
-const struct ast_node *expect_expression(struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser, const struct ejson_error_handler *p_error_handler);
+const struct ast_node *expect_expression(struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser, unsigned min_prec, const struct ejson_error_handler *p_error_handler);
 
 const struct ast_node *parse_primary(struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser, const struct ejson_error_handler *p_error_handler) {
 	const struct ast_node *p_temp_nodes[128];
@@ -629,7 +633,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 
 	if (p_token->cls == &TOK_LPAREN) {
 		const struct ast_node *p_subexpr;
-		if ((p_subexpr = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
+		if ((p_subexpr = expect_expression(p_workspace, p_tokeniser, 0, p_error_handler)) == NULL)
 			return NULL;
 		if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
 			return NULL;
@@ -650,17 +654,25 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		return ejson_error_null(p_error_handler, "out of memory\n");
 	p_ret->doc_pos = p_token->posinfo;
 
+	if (p_token->cls->unary_op_cls != NULL) {
+		p_ret->cls           = p_token->cls->unary_op_cls;
+		if ((p_ret->d.binop.p_lhs = expect_expression(p_workspace, p_tokeniser, p_token->cls->unary_precedence, p_error_handler)) == NULL)
+			return NULL;
+		p_ret->d.binop.p_rhs = NULL;
+		return p_ret;
+	}
+
 	if (p_token->cls == &TOK_ACCESS) {
 		p_ret->cls        = &AST_CLS_ACCESS;
-		if ((p_ret->d.access.p_data = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
+		if ((p_ret->d.access.p_data = expect_expression(p_workspace, p_tokeniser, 0, p_error_handler)) == NULL)
 			return NULL;
-		if ((p_ret->d.access.p_key = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
+		if ((p_ret->d.access.p_key = expect_expression(p_workspace, p_tokeniser, 0, p_error_handler)) == NULL)
 			return NULL;
 	} else if (p_token->cls == &TOK_MAP) {
 		p_ret->cls        = &AST_CLS_MAP;
-		if ((p_ret->d.map.p_function = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
+		if ((p_ret->d.map.p_function = expect_expression(p_workspace, p_tokeniser, 0, p_error_handler)) == NULL)
 			return NULL;
-		if ((p_ret->d.map.p_input_list = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
+		if ((p_ret->d.map.p_input_list = expect_expression(p_workspace, p_tokeniser, 0, p_error_handler)) == NULL)
 			return NULL;
 	} else if (p_token->cls == &TOK_INT) {
 		p_ret->cls        = &AST_CLS_LITERAL_INT;
@@ -687,13 +699,13 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		}
 		if (p_next->cls != &TOK_RBRACE) {
 			do {
-				if ((p_temp_nodes[2*nb_kvs+0] = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
+				if ((p_temp_nodes[2*nb_kvs+0] = expect_expression(p_workspace, p_tokeniser, 0, p_error_handler)) == NULL)
 					return NULL;
 				if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
 					return NULL;
 				if (p_token->cls != &TOK_COLON)
 					return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "expected a :\n");
-				if ((p_temp_nodes[2*nb_kvs+1] = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
+				if ((p_temp_nodes[2*nb_kvs+1] = expect_expression(p_workspace, p_tokeniser, 0, p_error_handler)) == NULL)
 					return NULL;
 				nb_kvs++;
 				if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
@@ -724,7 +736,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		}
 		if (p_next->cls != &TOK_RSQBR) {
 			do {
-				if ((p_temp_nodes[nb_list] = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
+				if ((p_temp_nodes[nb_list] = expect_expression(p_workspace, p_tokeniser, 0, p_error_handler)) == NULL)
 					return NULL;
 				nb_list++;
 				if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
@@ -745,14 +757,6 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		} else {
 			p_ret->d.llist.elements = NULL;
 		}
-	} else if (p_token->cls == &TOK_SUB) {
-		const struct ast_node *p_next;
-		/* TODO: This sucks we can have unary unary unary unary unary.... don't want. */
-		if ((p_next = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
-			return NULL;
-		p_ret->cls           = &AST_CLS_NEG;
-		p_ret->d.binop.p_lhs = p_next;
-		p_ret->d.binop.p_rhs = NULL;
 	} else if (p_token->cls == &TOK_NULL) {
 		p_ret->cls   = &AST_CLS_LITERAL_NULL;
 	} else if (p_token->cls == &TOK_TRUE) {
@@ -763,11 +767,11 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		p_ret->d.i = 0;
 	} else if (p_token->cls == &TOK_RANGE) {
 		p_ret->cls   = &AST_CLS_RANGE;
-		if ((p_ret->d.builtin.p_args = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
+		if ((p_ret->d.builtin.p_args = expect_expression(p_workspace, p_tokeniser, 0, p_error_handler)) == NULL)
 			return NULL;
 	} else if (p_token->cls == &TOK_FORMAT) {
 		p_ret->cls   = &AST_CLS_FORMAT;
-		if ((p_ret->d.builtin.p_args = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
+		if ((p_ret->d.builtin.p_args = expect_expression(p_workspace, p_tokeniser, 0, p_error_handler)) == NULL)
 			return NULL;
 	} else if (p_token->cls == &TOK_FUNC) {
 		unsigned        nb_args = 0;
@@ -818,7 +822,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		p_ret->d.fn.stack_depth_at_function_def = p_workspace->stack_depth;
 
 		p_workspace->stack_depth += nb_args;
-		if ((p_ret->d.fn.node = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
+		if ((p_ret->d.fn.node = expect_expression(p_workspace, p_tokeniser, 0, p_error_handler)) == NULL)
 			return NULL;
 		p_workspace->stack_depth -= nb_args;
 
@@ -830,9 +834,9 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		}
 	} else if (p_token->cls == &TOK_CALL) {
 		p_ret->cls        = &AST_CLS_CALL;
-		if ((p_ret->d.call.fn = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
+		if ((p_ret->d.call.fn = expect_expression(p_workspace, p_tokeniser, 0, p_error_handler)) == NULL)
 			return NULL;
-		if ((p_ret->d.call.p_args  = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
+		if ((p_ret->d.call.p_args  = expect_expression(p_workspace, p_tokeniser, 0, p_error_handler)) == NULL)
 			return NULL;
 	} else {
 		token_print(p_token);
@@ -843,64 +847,48 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 	return p_ret;
 }
 
-const struct ast_node *expect_expression_1(const struct ast_node *p_lhs, struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser, int min_precedence, const struct ejson_error_handler *p_error_handler) {
+const struct ast_node *expect_expression(struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser, unsigned min_prec, const struct ejson_error_handler *p_error_handler) {
+	const struct ast_node *p_lhs;
 	const struct token *p_token;
 
+	p_lhs = parse_primary(p_workspace, p_tokeniser, p_error_handler);
+	if (p_lhs == NULL)
+		return NULL;
+
 	while
-	    (   (p_token = tok_peek(p_tokeniser)) != NULL
-	    &&  p_token->cls->precedence > 0 /* lookahead is a binary operator */
-	    &&  p_token->cls->precedence >= min_precedence /* whose precedence is >= min_precedence */
-	    ) {
+		(   (p_token = tok_peek(p_tokeniser)) != NULL
+		&&  p_token->cls->bin_op_cls != NULL
+		&&  p_token->cls->binary_precedence >= min_prec
+		) {
 		const struct ast_node *p_rhs;
-		struct ast_node *p_comb;
-		const struct tok_def *p_op = p_token->cls;
-		struct token_pos_info loc_info = p_token->posinfo;
+		struct ast_node       *p_comb;
+		struct token_pos_info  loc_info = p_token->posinfo;
+		const struct tok_def  *p_cls    = p_token->cls;
+		unsigned               q        = (p_cls->right_associative) ? p_token->cls->binary_precedence : (p_token->cls->binary_precedence + 1);
 
-		p_token = tok_read(p_tokeniser, p_error_handler); /* Skip over the operator */
-		assert(p_token != NULL);
+		if (tok_read(p_tokeniser, p_error_handler) == NULL)
+			abort();
 
-		if ((p_rhs = parse_primary(p_workspace, p_tokeniser, p_error_handler)) == NULL)
+		if ((p_rhs = expect_expression(p_workspace, p_tokeniser, q, p_error_handler)) == NULL)
 			return NULL;
-	
-		while
-		    (   (p_token = tok_peek(p_tokeniser)) != NULL
-		    &&   p_token->cls->precedence > 0 /* lookahead is a binary operator */
-		    &&  (   p_token->cls->precedence > p_op->precedence  /* whose precedence is greater than op's */
-		        ||  (p_token->cls->right_associative && p_token->cls->precedence == p_op->precedence) /* or a right-associative operator whose precedence is equal to op's */
-		        )
-		    ) {
-			if ((p_rhs = expect_expression_1(p_rhs, p_workspace, p_tokeniser, p_token->cls->precedence, p_error_handler)) == NULL)
-				return NULL; /* No error message is needed here. The recursion guarantees that the previous error will trigger at the same token. */
-		}
-
-		assert(p_op->bin_op_cls != NULL);
 
 		if ((p_comb = cop_salloc(p_workspace->p_alloc, sizeof(struct ast_node), 0)) == NULL)
 			return ejson_error_null(p_error_handler, "out of memory\n");
 
-		p_comb->cls           = p_op->bin_op_cls;
+		p_comb->cls           = p_cls->bin_op_cls;
 		p_comb->doc_pos       = loc_info;
 		p_comb->d.binop.p_lhs = p_lhs;
 		p_comb->d.binop.p_rhs = p_rhs;
 		p_lhs = p_comb;
 	}
 
-
 	return p_lhs;
-}
-
-const struct ast_node *expect_expression(struct evaluation_context *p_workspace, struct tokeniser *p_tokeniser, const struct ejson_error_handler *p_error_handler) {
-	const struct ast_node *p_lhs = parse_primary(p_workspace, p_tokeniser, p_error_handler);
-	if (p_lhs == NULL)
-		return NULL;
-	return expect_expression_1(p_lhs, p_workspace, p_tokeniser, 0, p_error_handler);
 }
 
 struct jnode_data {
 	struct ast_node *p_root;
 	struct ast_node *p_stack;
 	unsigned         nb_stack;
-
 
 };
 
@@ -1238,7 +1226,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 	}
 
 	/* Unary negation */
-	if (p_src->cls == &AST_CLS_NEG) {
+	if (p_src->cls == &AST_CLS_NEG || p_src->cls == &AST_CLS_LOGNOT) {
 		const struct ast_node *p_result;
 		struct ast_node       *p_tmp2;
 		size_t                 save;
@@ -1249,21 +1237,32 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		if ((p_result = evaluate_ast(p_src->d.binop.p_lhs, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
 			return NULL;
 
-		if (p_result->cls == &AST_CLS_LITERAL_INT) {
-			p_tmp2->cls = &AST_CLS_LITERAL_INT;
-			p_tmp2->d.i = -p_result->d.i;
+		if (p_src->cls == &AST_CLS_NEG) {
+			if (p_result->cls == &AST_CLS_LITERAL_INT) {
+				p_tmp2->cls = &AST_CLS_LITERAL_INT;
+				p_tmp2->d.i = -p_result->d.i;
+				cop_salloc_restore(p_alloc, save);
+				return p_tmp2;
+			}
+
+			if (p_result->cls == &AST_CLS_LITERAL_FLOAT) {
+				p_tmp2->cls = &AST_CLS_LITERAL_FLOAT;
+				p_tmp2->d.f = -p_result->d.f;
+				cop_salloc_restore(p_alloc, save);
+				return p_tmp2;
+			}
+
+			return ejson_location_error_null(p_error_handler, &(p_src->doc_pos), "the expression for the unary negation operator did not evaluate to a numeric type\n");
+		}
+
+		if (p_result->cls == &AST_CLS_LITERAL_BOOL) {
+			p_tmp2->cls = &AST_CLS_LITERAL_BOOL;
+			p_tmp2->d.i = !p_result->d.i;
 			cop_salloc_restore(p_alloc, save);
 			return p_tmp2;
 		}
 
-		if (p_result->cls == &AST_CLS_LITERAL_FLOAT) {
-			p_tmp2->cls = &AST_CLS_LITERAL_FLOAT;
-			p_tmp2->d.f = -p_result->d.f;
-			cop_salloc_restore(p_alloc, save);
-			return p_tmp2;
-		}
-
-		return ejson_location_error_null(p_error_handler, &(p_src->doc_pos), "the expression for the unary negation operator did not evaluate to a numeric type\n");
+		return ejson_location_error_null(p_error_handler, &(p_src->doc_pos), "the expression for the unary not operator did not evaluate to a boolean type\n");
 	}
 
 	/* Convert range into an accessor object */
@@ -1368,6 +1367,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 	    || p_src->cls == &AST_CLS_BITOR || p_src->cls == &AST_CLS_BITAND
 	    || p_src->cls == &AST_CLS_LOGAND || p_src->cls == &AST_CLS_LOGOR
 	    || p_src->cls == &AST_CLS_EQ || p_src->cls == &AST_CLS_NEQ || p_src->cls == &AST_CLS_GT || p_src->cls == &AST_CLS_GEQ || p_src->cls == &AST_CLS_LEQ || p_src->cls == &AST_CLS_LT
+	    || p_src->cls == &AST_CLS_EXP
 	    ) {
 		const struct ast_node *p_lhs;
 		const struct ast_node *p_rhs;
@@ -1429,7 +1429,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		}
 
 		/* Promote types */
-		if (p_lhs->cls == &AST_CLS_LITERAL_FLOAT || p_rhs->cls == &AST_CLS_LITERAL_FLOAT) {
+		if (p_lhs->cls == &AST_CLS_LITERAL_FLOAT || p_rhs->cls == &AST_CLS_LITERAL_FLOAT || p_src->cls == &AST_CLS_EXP) {
 			double lhs, rhs;
 
 			if (p_lhs->cls == &AST_CLS_LITERAL_FLOAT)
@@ -1448,7 +1448,10 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 
 			cop_salloc_restore(p_alloc, save);
 
-			if (p_src->cls == &AST_CLS_ADD) {
+			if (p_src->cls == &AST_CLS_EXP) {
+				p_ret->cls = &AST_CLS_LITERAL_FLOAT;
+				p_ret->d.f = pow(lhs, rhs);
+			} else if (p_src->cls == &AST_CLS_ADD) {
 				p_ret->cls = &AST_CLS_LITERAL_FLOAT;
 				p_ret->d.f = lhs + rhs;
 			} else if (p_src->cls == &AST_CLS_SUB) {
@@ -1687,7 +1690,7 @@ int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace,
 			return 1;
 		if (p_token->cls != &TOK_ASSIGN)
 			return ejson_location_error(p_error_handler, &(p_token->posinfo), "expected '='\n");
-		if ((p_obj = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
+		if ((p_obj = expect_expression(p_workspace, p_tokeniser, 0, p_error_handler)) == NULL)
 			return ejson_error(p_error_handler, "expected an expression\n");
 		if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
 			return 1;
@@ -1697,7 +1700,7 @@ int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace,
 		if (cop_strdict_insert(&(p_workspace->p_workspace), p_wsnode))
 			return ejson_error(p_error_handler, "cannot redefine variable '%s'\n", ident.ptr);
 	}
-	if ((p_obj = expect_expression(p_workspace, p_tokeniser, p_error_handler)) == NULL)
+	if ((p_obj = expect_expression(p_workspace, p_tokeniser, 0, p_error_handler)) == NULL)
 		return 1;
 	if ((p_token = tok_peek(p_tokeniser)) != NULL)
 		return ejson_location_error(p_error_handler, &(p_token->posinfo), "expected no more tokens at end of document\n", p_token->cls->name);

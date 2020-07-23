@@ -50,13 +50,13 @@ int run_test(const char *p_ejson, const char *p_ref, const char *p_name) {
 	if (ejson_load(&dut, &ws, p_ejson, &err)) {
 		if (p_ref != NULL) {
 			fprintf(stderr, "FAILED: test '%s' failed due to above messages.\n", p_name);
-			return -1;
+			return 1;
 		} else {
 			printf("PASSED: xtest '%s'\n", p_name);
 		}
 	} else if (p_ref == NULL) {
 		printf("FAILED: xtest '%s' generated a node.\n", p_name);
-		return -1;
+		return 1;
 	}
 
 	if (p_ref != NULL) {
@@ -85,7 +85,7 @@ int run_test(const char *p_ejson, const char *p_ref, const char *p_name) {
 			jnode_print(&ref, &a2, 4);
 			fprintf(stderr, "  DUT:\n    ");
 			jnode_print(&dut, &a2, 4);
-			return -1;
+			return 1;
 		}
 
 		printf("PASSED: test '%s'.\n", p_name);
@@ -97,6 +97,8 @@ int run_test(const char *p_ejson, const char *p_ref, const char *p_name) {
 int main(int argc, char *argv[]) {
 	int errors = 0;
 	int tests = 0;
+
+	/* Simple JSON types */
 	tests++; errors += run_test
 		("\"hello world\""
 		,"\"hello world\""
@@ -158,6 +160,35 @@ int main(int argc, char *argv[]) {
 		,"dictionary nesting"
 		);
 	tests++; errors += run_test
+		("[1,-2,3.4,-4.5,5.6e2,-7.8e-2]"
+		,"[1,-2,3.4,-4.5,5.6e2,-7.8e-2]"
+		,"numeric objects in a list"
+		);
+
+	/* Hexadecimal numeric extensions */
+	tests++; errors += run_test
+		("0x01"
+		,"1"
+		,"hex int objects"
+		);
+	tests++; errors += run_test
+		("0x20"
+		,"32"
+		,"hex int objects"
+		);
+	tests++; errors += run_test
+		("0x0a"
+		,"10"
+		,"hex int objects"
+		);
+	tests++; errors += run_test
+		("0x4F"
+		,"79"
+		,"hex int objects"
+		);
+
+	/* Binary and unary expression tests */
+	tests++; errors += run_test
 		("5+5+5"
 		,"15"
 		,"int additive expression 1"
@@ -188,10 +219,62 @@ int main(int argc, char *argv[]) {
 		,"float additive expression 1"
 		);
 	tests++; errors += run_test
-		("[1,-2,3.4,-4.5,5.6e2,-7.8e-2]"
-		,"[1,-2,3.4,-4.5,5.6e2,-7.8e-2]"
-		,"numeric objects in a list"
+		("1+2*3+4"
+		,"11"
+		,"test precedence of addition is lower than multiplication"
 		);
+	tests++; errors += run_test
+		("3*2^3"
+		,"24.0"
+		,"test precedence of multiplication is lower than exponentiation"
+		);
+	tests++; errors += run_test
+		("0+-2^3"
+		,"-8.0"
+		,"test precedence of unary negation is lower than exponentiation"
+		);
+	tests++; errors += run_test
+		("not true"
+		,"false"
+		,"test negation of true"
+		);
+	tests++; errors += run_test
+		("not false"
+		,"true"
+		,"test negation of false"
+		);
+	tests++; errors += run_test
+		("not true or not false"
+		,"true"
+		,"test precedence of logical not is higher than logical or"
+		);
+	tests++; errors += run_test
+		("not false and true"
+		,"true"
+		,"test precedence of logical not is higher than logical and"
+		);
+	tests++; errors += run_test
+		("3+1>=1+4"
+		,"false"
+		,"comparison expression"
+		);
+	tests++; errors += run_test
+		("3+2<=1+4"
+		,"true"
+		,"comparison expression"
+		);
+	tests++; errors += run_test
+		("true==true"
+		,"true"
+		,"comparison expression"
+		);
+	tests++; errors += run_test
+		("true==false"
+		,"false"
+		,"comparison expression"
+		);
+
+	/* List concatenations */
 	tests++; errors += run_test
 		("[1,2,3,4]+[5,6,7]+[8,9,10]"
 		,"[1,2,3,4,5,6,7,8,9,10]"
@@ -206,55 +289,6 @@ int main(int argc, char *argv[]) {
 		("(call func[] [1,2,3,4] [])+(range [5,8])+[9,10]"
 		,"[1,2,3,4,5,6,7,8,9,10]"
 		,"list concatenation incl. a range and function"
-		);
-
-	/* extended hexadecimal numerics */
-	tests++; errors += run_test
-		("0x01"
-		,"1"
-		,"hex int objects"
-		);
-	tests++; errors += run_test
-		("0x20"
-		,"32"
-		,"hex int objects"
-		);
-	tests++; errors += run_test
-		("0x0a"
-		,"10"
-		,"hex int objects"
-		);
-	tests++; errors += run_test
-		("0x4F"
-		,"79"
-		,"hex int objects"
-		);
-
-	/* comparison operators */
-	tests++; errors += run_test
-		("3+1>=1+4"
-		,"false"
-		,"comparison expression"
-		);
-	tests++; errors += run_test
-		("3+2<=1+4"
-		,"true"
-		,"comparison expression"
-		);
-	tests++; errors += run_test
-		("map func[x] x <= 2 range [5]"
-		,"[true, true, true, false, false]"
-		,"map of comparison result"
-		);
-	tests++; errors += run_test
-		("true==true"
-		,"true"
-		,"comparison expression"
-		);
-	tests++; errors += run_test
-		("true==false"
-		,"false"
-		,"comparison expression"
 		);
 
 	/* range tests */
@@ -427,6 +461,11 @@ int main(int argc, char *argv[]) {
 		("range call func[] [1,2,9] []"
 		,"[1,3,5,7,9]"
 		,"call range with arguments given by the result of a function call"
+		);
+	tests++; errors += run_test
+		("map func[x] x <= 2 range [5]"
+		,"[true, true, true, false, false]"
+		,"map of comparison result"
 		);
 
 	/* format tests */
