@@ -1,3 +1,4 @@
+#include "cop/cop_main.h"
 #include "ejson/ejson.h"
 #include "ejson/json_iface_utils.h"
 #include <stdio.h>
@@ -43,8 +44,7 @@ static void *load_text_to_memory(const char *fname) {
 	return NULL;
 }
 
-
-int main(int argc, char *argv[]) {
+int expand_main(int argc, char *argv[]) {
 
 	if (argc > 1) {
 		char *data;
@@ -87,3 +87,5 @@ int main(int argc, char *argv[]) {
 
 	return 0;
 }
+
+COP_MAIN(expand_main)

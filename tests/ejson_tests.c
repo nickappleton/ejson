@@ -1,4 +1,4 @@
-
+#include "cop/cop_main.h"
 #include "json_simple_load.h"
 #include "ejson/json_iface_utils.h"
 #include "ejson/ejson.h"
@@ -94,7 +94,7 @@ int run_test(const char *p_ejson, const char *p_ref, const char *p_name) {
 	return 0;
 }
 
-int main(int argc, char *argv[]) {
+static int test_main(int argc, char *argv[]) {
 	int errors = 0;
 	int tests = 0;
 
@@ -758,4 +758,6 @@ int main(int argc, char *argv[]) {
 
 	return (errors) ? EXIT_FAILURE : EXIT_SUCCESS;
 }
+
+COP_MAIN(test_main)
 
