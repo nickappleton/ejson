@@ -381,6 +381,69 @@ static int test_main(int argc, char *argv[]) {
 		,"calling a function where the arguments are the list produced by "
 		 "calling range"
 		);
+	tests++; errors += run_test
+		("call call call func [x] func [y] func[z] x-y-z [13] [7] [5]"
+		,"1"
+		,"CCCFFF defined function closure test"
+		);
+	tests++; errors += run_test
+		("call call func [x] call func [y] func[z] x-y-z [13] [7] [5]"
+		,"-11"
+		,"CCFCFF defined function closure test"
+		);
+	tests++; errors += run_test
+		("call call func [x] func [y] call func[z] x-y-z [13] [7] [5]"
+		,"-11"
+		,"CCFFCF defined function closure test"
+		);
+	tests++; errors += run_test
+		("call func [x] call call func [y] func[z] x-y-z [13] [7] [5]"
+		,"-15"
+		,"CFCCFF defined function closure test"
+		);
+	tests++; errors += run_test
+		("call func [x] call func [y] call func[z] x-y-z [13] [7] [5]"
+		,"-15"
+		,"CFCFCF defined function closure test"
+		);
+	tests++; errors += run_test
+		("call call func [x] func [y] y+x [10] [1]"
+		,"11"
+		,"CCFF defined function closure test"
+		);
+	tests++; errors += run_test
+		("define f = func [a] (func [b] b-a);\n"
+		 "define sub_10 = call f [10];\n"
+		 "call sub_10 [1]"
+		,"-9"
+		,"defined function closure test"
+		);
+	tests++; errors += run_test
+		("define f = func [a] (func [b] b-a);\n"
+		 "define sub_1 = call f [1];\n"
+		 "define sub_10 = call f [10];\n"
+		 "[call sub_10 [7], call sub_1 [2]]"
+		,"[-3, 1]"
+		,"defined function closure test"
+		);
+
+	tests++; errors += run_test
+		("call access [func [a,b] a*b, func [a,b] a-b] 1 [1,2]"
+		,"-1"
+		,"list of functions"
+		);
+	tests++; errors += run_test
+		("map func [x] call x [3,5] [func [a,b] a*b, func [a,b] a-b, func [a,b] a%b]"
+		,"[15,-2,3]"
+		,"map of functions"
+		);
+#if 0 /* oh boy i screwed this whole thing up. */
+	tests++; errors += run_test
+		("call func [c] (map func [x] call x [3,5] [func [a,b] c+a*b, func [a,b] a-b, func [a,b] a%b]) [10]"
+		,"[15,-2,3]"
+		,"map of functions in a call"
+		);
+#endif
 
 	/* define tests */
 	tests++; errors += run_test
@@ -771,14 +834,8 @@ static int test_main(int argc, char *argv[]) {
 		,NULL
 		,"empty document should result in a parse error"
 		);
-	tests++; errors += run_test
-		("define f = func [a] (func [b] b*a);\n"
-		 "define add_1 = call f [1];\n"
-		 "define add_10 = call f [10];\n"
-		 "[call add_10 [1], call add_1 [2]]"
-		,"[11, 3]"
-		,"defined function closure test"
-		);
+
+
 
 	fprintf((errors) ? stderr : stdout, "\n%d of %d tests passed\n", tests - errors, tests);
 

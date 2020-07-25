@@ -7,6 +7,7 @@
 #include <math.h>
 #include "parse_helpers.h"
 
+/* TODO: remove llist from ast - immediately resolve it to a lgen class during building of the tree. */
 
 #define MAX_TOK_STRING (4096)
 
@@ -103,9 +104,10 @@ struct ast_node {
 			const struct ast_node  *p_list;
 		} lmap;
 		struct {
-			const struct ast_node  *node;
-			unsigned                nb_args;
-			unsigned                stack_depth_at_function_def;
+			const struct ast_node  **pp_stack;
+			unsigned                 stack_size;
+			const struct ast_node   *node;
+			unsigned                 nb_args;
 		} fn; /* AST_CLS_FUNCTION */
 		struct {
 			const struct ast_node  *fn;
@@ -650,8 +652,21 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		if (cop_strdict_get_by_cstr(p_workspace->p_workspace, p_token->t.strident.str, (void **)&node))
 			return ejson_location_error_null(p_error_handler, &(p_token->posinfo), "'%s' was not found in the workspace\n", p_token->t.strident.str);
 		assert(node != NULL);
-		return node;
+
+		/* if the node is not a stack reference, it is definitely a define'ed workspace expression. */
+		if (node->cls != &AST_CLS_STACKREF)
+			return node;
+
+		/* otherwise, the node is absolutely a reference to a function argument which needs to be adjusted based on the current stack position. */
+		if ((p_ret = cop_salloc(p_workspace->p_alloc, sizeof(struct ast_node), 0)) == NULL)
+			return ejson_error_null(p_error_handler, "out of memory\n");
+
+		p_ret->doc_pos = p_token->posinfo;
+		p_ret->cls     = &AST_CLS_STACKREF;
+		p_ret->d.i     = 1 + p_workspace->stack_depth - node->d.i;
+		return p_ret;
 	}
+
 
 	if ((p_ret = cop_salloc(p_workspace->p_alloc, sizeof(struct ast_node), 0)) == NULL)
 		return ejson_error_null(p_error_handler, "out of memory\n");
@@ -822,7 +837,8 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 
 		p_ret->cls                              = &AST_CLS_FUNCTION;
 		p_ret->d.fn.nb_args                     = nb_args;
-		p_ret->d.fn.stack_depth_at_function_def = p_workspace->stack_depth;
+		p_ret->d.fn.stack_size                  = 0;
+		p_ret->d.fn.pp_stack                    = NULL;
 
 		p_workspace->stack_depth += nb_args;
 		if ((p_ret->d.fn.node = expect_expression(p_workspace, p_tokeniser, 0, p_error_handler)) == NULL)
@@ -924,6 +940,8 @@ struct lrange {
 const struct ast_node *ast_list_generator_get_element(const struct ast_node *p_list, unsigned element, struct cop_salloc_iface *p_alloc, const struct ejson_error_handler *p_error_handler) {
 	struct ast_node *p_dest;
 	assert(p_list->cls == &AST_CLS_LIST_GENERATOR);
+	assert(p_list->d.lgen.pp_stack == NULL);
+	assert(p_list->d.lgen.stack_size == 0);
 	if (element >= p_list->d.lgen.nb_elements)
 		return (ejson_error(p_error_handler, "list index out of range\n"), NULL);
 	if ((p_dest = cop_salloc(p_alloc, sizeof(struct ast_node), 0)) == NULL)
@@ -976,6 +994,15 @@ const struct ast_node *ast_list_generator_map(const struct ast_node *p_src, unsi
 	if ((p_argument = p_list->d.lgen.get_element(p_list, element, p_alloc, p_error_handler)) == NULL)
 		return NULL;
 
+	if ((pp_tmp = cop_salloc(p_alloc, sizeof(struct ast_node *) * (p_function->d.fn.stack_size + 1), 0)) == NULL)
+		return ejson_error_null(p_error_handler, "out of memory\n");
+	if (p_function->d.fn.stack_size)
+		memcpy(pp_tmp, p_function->d.fn.pp_stack, p_function->d.fn.stack_size * sizeof(struct ast_node *));
+	pp_tmp[p_function->d.fn.stack_size] = p_argument;
+
+	return evaluate_ast(p_function->d.fn.node, pp_tmp, p_function->d.fn.stack_size + 1, p_alloc, p_error_handler);
+
+#if 0
 	assert(p_src->d.lgen.stack_size == p_function->d.fn.stack_depth_at_function_def || !p_function->d.fn.stack_depth_at_function_def);
 
 	if ((pp_tmp = cop_salloc(p_alloc, sizeof(struct ast_node *) * (p_function->d.fn.stack_depth_at_function_def + 1), 0)) == NULL)
@@ -985,20 +1012,18 @@ const struct ast_node *ast_list_generator_map(const struct ast_node *p_src, unsi
 	pp_tmp[p_function->d.fn.stack_depth_at_function_def] = p_argument;
 
 	return evaluate_ast(p_function->d.fn.node, pp_tmp, p_function->d.fn.stack_depth_at_function_def + 1, p_alloc, p_error_handler);
+#endif
 }
 
 const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct ast_node **pp_stackx, unsigned stack_sizex, struct cop_salloc_iface *p_alloc, const struct ejson_error_handler *p_error_handler) {
 	/* Move through stack references. */
-	assert(p_src->cls != NULL);
-	assert(p_src->cls->p_name != NULL);
-
+	assert(p_src != NULL);
 	while (p_src->cls == &AST_CLS_STACKREF) {
 		assert(pp_stackx != NULL);
 		assert(p_src->d.i > 0 && p_src->d.i <= stack_sizex);
-		p_src = pp_stackx[p_src->d.i - 1];
+		p_src = pp_stackx[stack_sizex - p_src->d.i];
 		assert(p_src != NULL);
-	}
-	
+	}	
 	assert(p_src->cls != NULL);
 	assert(p_src->cls->p_name != NULL);
 
@@ -1010,12 +1035,27 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 	    ||  p_src->cls == &AST_CLS_LITERAL_NULL
 	    ||  p_src->cls == &AST_CLS_LIST_GENERATOR
 	    ||  p_src->cls == &AST_CLS_READY_DICT
-	    ||  p_src->cls == &AST_CLS_FUNCTION
 	    ) {
 		return p_src;
 	}
 
-	/* Convert lists into list generators */
+	if (p_src->cls == &AST_CLS_FUNCTION) {
+		struct ast_node *p_ret;
+		assert(p_src->d.fn.pp_stack == NULL);
+		if (stack_sizex == 0)
+			return p_src;
+		if ((p_ret = cop_salloc(p_alloc, sizeof(struct ast_node), 0)) == NULL)
+			return ejson_error_null(p_error_handler, "out of memory\n");
+		p_ret->cls             = p_src->cls;
+		p_ret->doc_pos         = p_src->doc_pos;
+		p_ret->d.fn.nb_args    = p_src->d.fn.nb_args;
+		p_ret->d.fn.node       = p_src->d.fn.node;
+		p_ret->d.fn.stack_size = stack_sizex;
+		p_ret->d.fn.pp_stack   = pp_stackx;
+		return p_ret;
+	}
+
+	/* Convert lists into list generators - fixme: this should happen while building the ast. */
 	if  (p_src->cls == &AST_CLS_LITERAL_LIST) {
 		struct ast_node *p_ret;
 		if ((p_ret = cop_salloc(p_alloc, sizeof(struct ast_node), 0)) == NULL)
@@ -1198,9 +1238,9 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 
 	/* Function call */
 	if (p_src->cls == &AST_CLS_CALL) {
-		const struct ast_node *p_function;
-		const struct ast_node *p_args;
-		const struct ast_node **pp_stack2 = pp_stackx;
+		const struct ast_node  *p_function;
+		const struct ast_node  *p_args;
+		const struct ast_node **pp_stack2;
 
 		if ((p_function = evaluate_ast(p_src->d.call.fn, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
 			return NULL;
@@ -1212,20 +1252,20 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 			return ejson_error_null(p_error_handler, "the argument expression for call did not evaluate to a list\n");
 		if (p_args->d.lgen.nb_elements != p_function->d.fn.nb_args)
 			return ejson_location_error_null(p_error_handler, &(p_src->doc_pos), "the number of arguments supplied to function was incorrect (expected %u but got %u)\n", p_function->d.fn.nb_args, p_args->d.lgen.nb_elements);
+
+		pp_stack2 = p_function->d.fn.pp_stack;
 		if (p_args->d.lgen.nb_elements) {
 			unsigned i;
-			assert(stack_sizex == p_function->d.fn.stack_depth_at_function_def || !p_function->d.fn.stack_depth_at_function_def);
-			if ((pp_stack2 = cop_salloc(p_alloc, sizeof(struct ast_node *) * (p_function->d.fn.stack_depth_at_function_def + p_args->d.lgen.nb_elements), 0)) == NULL)
+			if ((pp_stack2 = cop_salloc(p_alloc, sizeof(struct ast_node *) * (p_function->d.fn.stack_size + p_args->d.lgen.nb_elements), 0)) == NULL)
 				return ejson_error_null(p_error_handler, "out of memory\n");
-			if (p_function->d.fn.stack_depth_at_function_def)
-				memcpy(pp_stack2, pp_stackx, p_function->d.fn.stack_depth_at_function_def * sizeof(struct ast_node *));
+			if (p_function->d.fn.stack_size)
+				memcpy(pp_stack2, p_function->d.fn.pp_stack, p_function->d.fn.stack_size * sizeof(struct ast_node *));
 			for (i = 0; i < p_args->d.lgen.nb_elements; i++) {
-				if ((pp_stack2[p_function->d.fn.stack_depth_at_function_def + i] = p_args->d.lgen.get_element(p_args, i, p_alloc, p_error_handler)) == NULL)
+				if ((pp_stack2[p_function->d.fn.stack_size + i] = p_args->d.lgen.get_element(p_args, i, p_alloc, p_error_handler)) == NULL)
 					return ejson_error_null(p_error_handler, "failed to evaluate list element %d because\n", i);
 			}
 		}
-
-		return evaluate_ast(p_function->d.fn.node, pp_stack2, p_function->d.fn.stack_depth_at_function_def + p_args->d.lgen.nb_elements, p_alloc, p_error_handler);
+		return evaluate_ast(p_function->d.fn.node, pp_stack2, p_function->d.fn.stack_size + p_args->d.lgen.nb_elements, p_alloc, p_error_handler);
 	}
 
 	/* Unary negation */
@@ -1333,6 +1373,8 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		
 		p_result->cls                  = &AST_CLS_LIST_GENERATOR;
 		p_result->doc_pos              = p_src->doc_pos;
+		p_result->d.lgen.pp_stack      = NULL;
+		p_result->d.lgen.stack_size    = 0;
 		p_result->d.lgen.get_element   = ast_list_generator_get_element;
 		p_result->d.lgen.nb_elements   = lrange.numel;
 		p_result->d.lgen.d.range.first = lrange.first;
@@ -1537,7 +1579,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 			return p_ret;
 		}
 
-		return ejson_location_error_null(p_error_handler, &(p_ret->doc_pos), "the types given for binary operator %s were invalid\n", p_src->cls->p_name);
+		return ejson_location_error_null(p_error_handler, &(p_ret->doc_pos), "the types given for binary operator %s were invalid (%s, %s)\n", p_src->cls->p_name, p_lhs->cls->p_name, p_rhs->cls->p_name);
 	}
 
 	fprintf(stderr, "what?\n");
@@ -1702,12 +1744,17 @@ int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace,
 		cop_strdict_node_init(p_wsnode, &ident, (void *)p_obj);
 		if (cop_strdict_insert(&(p_workspace->p_workspace), p_wsnode))
 			return ejson_error(p_error_handler, "cannot redefine variable '%s'\n", ident.ptr);
+#if 0
+		printf("-%s-\n", ident.ptr);
+		p_obj->cls->debug_print(p_obj, stdout, 0);
+#endif
 	}
 	if ((p_obj = expect_expression(p_workspace, p_tokeniser, 0, p_error_handler)) == NULL)
 		return 1;
 	if ((p_token = tok_peek(p_tokeniser)) != NULL)
 		return ejson_location_error(p_error_handler, &(p_token->posinfo), "expected no more tokens at end of document\n", p_token->cls->name);
 #if 0
+	printf("---\n");
 	p_obj->cls->debug_print(p_obj, stdout, 0);
 #endif
 	if ((p_root = evaluate_ast(p_obj, NULL, 0, p_workspace->p_alloc, p_error_handler)) == NULL)
