@@ -606,11 +606,14 @@ const struct token *tok_read(struct tokeniser *p_tokeniser, const struct ejson_e
 }
 
 static int tokeniser_start(struct tokeniser *p_tokeniser, const char *buf) {
-	p_tokeniser->line_nb      = 1;
-	p_tokeniser->p_line_start = buf;
-	p_tokeniser->buf          = buf;
-	p_tokeniser->p_current    = &(p_tokeniser->curx);
-	p_tokeniser->p_next       = &(p_tokeniser->nextx);
+	p_tokeniser->line_nb                  = 1;
+	p_tokeniser->p_line_start             = buf;
+	p_tokeniser->buf                      = buf;
+	p_tokeniser->p_current                = &(p_tokeniser->curx);
+	p_tokeniser->p_next                   = &(p_tokeniser->nextx);
+	p_tokeniser->p_next->posinfo.p_line   = buf;
+	p_tokeniser->p_next->posinfo.char_pos = 0;
+	p_tokeniser->p_next->posinfo.line_nb  = 1;
 	return (tok_read(p_tokeniser, NULL) == NULL) ? 1 : 0;
 }
 
@@ -802,7 +805,7 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 				argnames[nb_args].ptr = (unsigned char *)(p_wsnode + 1);
 				cop_strdict_node_init(p_wsnode, &(argnames[nb_args]), p_arg);
 				if (cop_strdict_insert(&(p_workspace->p_workspace), p_wsnode))
-					return ejson_location_error_null(p_error_handler, &identpos, "function parameter names may only appear once and must alias workspace variables\n");
+					return ejson_location_error_null(p_error_handler, &identpos, "function parameter names may only appear once and must not alias workspace variables\n");
 				if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
 					return NULL;
 				if (p_token->cls != &TOK_COMMA && p_token->cls != &TOK_RSQBR)
@@ -1147,7 +1150,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 			p_dn->data = p_src->d.ldict.elements[2*i+1];
 
 			if (cop_strdict_insert(&p_root, &(p_dn->node)))
-				return ejson_error_null(p_error_handler, "attempted to add a key to a dictionary that already existed (%s)\n", p_key->d.str.p_data);
+				return ejson_location_error_null(p_error_handler, &(p_src->d.ldict.elements[2*i+0]->doc_pos), "attempted to add a key to a dictionary that already existed (%s)\n", p_key->d.str.p_data);
 		}
 
 		if ((p_ret = cop_salloc(p_alloc, sizeof(struct ast_node), 0)) == NULL)
@@ -1190,7 +1193,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 			return evaluate_ast(p_node->data, pp_stackx, stack_sizex, p_alloc, p_error_handler);
 		}
 
-		return ejson_error_null(p_error_handler, "the list expression for access did not evaluate to a list\n");
+		return ejson_location_error_null(p_error_handler, &(p_src->d.access.p_data->doc_pos), "the list expression for access did not evaluate to a list or a dictionary\n");
 	}
 
 	/* Function call */

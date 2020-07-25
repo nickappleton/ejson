@@ -602,6 +602,13 @@ static int test_main(int argc, char *argv[]) {
 		,NULL
 		,"map could not parse second expression"
 		);
+
+	/* access error tests */
+	tests++; errors += run_test
+		("access 1 \"hehre\""
+		,NULL
+		,"the list expression for access did not evaluate to a list or a dictionary"
+		);
 	tests++; errors += run_test
 		("access [1, 2, 3, 4, 5] \"hehre\""
 		,NULL
@@ -752,6 +759,25 @@ static int test_main(int argc, char *argv[]) {
 		("call func[x] x [1, 2]"
 		,NULL
 		,"call a function with incorrect number of arguments (1)"
+		);
+	tests++; errors += run_test
+		("{\"a\": 1, \"a\": 2}"
+		,NULL
+		,"attempted to add a key to a dictionary that already existed"
+		);
+
+	tests++; errors += run_test
+		(""
+		,NULL
+		,"empty document should result in a parse error"
+		);
+	tests++; errors += run_test
+		("define f = func [a] (func [b] b*a);\n"
+		 "define add_1 = call f [1];\n"
+		 "define add_10 = call f [10];\n"
+		 "[call add_10 [1], call add_1 [2]]"
+		,"[11, 3]"
+		,"defined function closure test"
 		);
 
 	fprintf((errors) ? stderr : stdout, "\n%d of %d tests passed\n", tests - errors, tests);
