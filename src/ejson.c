@@ -690,8 +690,10 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		p_ret->cls        = &AST_CLS_MAP;
 		if ((p_ret->d.map.p_function = expect_expression(p_workspace, p_tokeniser, 0, p_error_handler)) == NULL)
 			return NULL;
+		p_workspace->stack_depth++;
 		if ((p_ret->d.map.p_input_list = expect_expression(p_workspace, p_tokeniser, 0, p_error_handler)) == NULL)
 			return NULL;
+		p_workspace->stack_depth--;
 	} else if (p_token->cls == &TOK_INT) {
 		p_ret->cls        = &AST_CLS_LITERAL_INT;
 		p_ret->d.i        = p_token->t.tint;
@@ -990,7 +992,7 @@ const struct ast_node *ast_list_generator_map(const struct ast_node *p_src, unsi
 	if (element >= p_list->d.lgen.nb_elements)
 		return (ejson_error(p_error_handler, "list index out of range\n"), NULL);
 
-	/* Evaluate argument and shove on stack */
+	/* Evaluate argument, shove on stack, execute function. */
 	if ((p_argument = p_list->d.lgen.get_element(p_list, element, p_alloc, p_error_handler)) == NULL)
 		return NULL;
 
@@ -1001,18 +1003,6 @@ const struct ast_node *ast_list_generator_map(const struct ast_node *p_src, unsi
 	pp_tmp[p_function->d.fn.stack_size] = p_argument;
 
 	return evaluate_ast(p_function->d.fn.node, pp_tmp, p_function->d.fn.stack_size + 1, p_alloc, p_error_handler);
-
-#if 0
-	assert(p_src->d.lgen.stack_size == p_function->d.fn.stack_depth_at_function_def || !p_function->d.fn.stack_depth_at_function_def);
-
-	if ((pp_tmp = cop_salloc(p_alloc, sizeof(struct ast_node *) * (p_function->d.fn.stack_depth_at_function_def + 1), 0)) == NULL)
-		return ejson_error_null(p_error_handler, "out of memory\n");
-	if (p_function->d.fn.stack_depth_at_function_def)
-		memcpy(pp_tmp, p_src->d.lgen.pp_stack, p_function->d.fn.stack_depth_at_function_def * sizeof(struct ast_node *));
-	pp_tmp[p_function->d.fn.stack_depth_at_function_def] = p_argument;
-
-	return evaluate_ast(p_function->d.fn.node, pp_tmp, p_function->d.fn.stack_depth_at_function_def + 1, p_alloc, p_error_handler);
-#endif
 }
 
 const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct ast_node **pp_stackx, unsigned stack_sizex, struct cop_salloc_iface *p_alloc, const struct ejson_error_handler *p_error_handler) {
@@ -1041,7 +1031,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 
 	if (p_src->cls == &AST_CLS_FUNCTION) {
 		struct ast_node *p_ret;
-		assert(p_src->d.fn.pp_stack == NULL);
+		//FIXME??? WHY CAN THIS NOT BE ASSERTED?  assert(p_src->d.fn.pp_stack == NULL);
 		if (stack_sizex == 0)
 			return p_src;
 		if ((p_ret = cop_salloc(p_alloc, sizeof(struct ast_node), 0)) == NULL)
@@ -1385,12 +1375,25 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 	if (p_src->cls == &AST_CLS_MAP) {
 		const struct ast_node *p_function, *p_list;
 		struct ast_node *p_tmp;
-
+		const struct ast_node **pp_tmp;
+		
 		if ((p_function = evaluate_ast(p_src->d.map.p_function, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
 			return NULL;
 		if (p_function->cls != &AST_CLS_FUNCTION || p_function->d.fn.nb_args != 1)
 			return ejson_location_error_null(p_error_handler, &(p_src->doc_pos), "map expects a function argument that takes one argument\n");
-		if ((p_list = evaluate_ast(p_src->d.map.p_input_list, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
+
+		/* hoak hoak hoak... maps always increase the stack depth by one. this
+		 * is not always necessary. but because of how i handle stack
+		 * variables, we must add an entry to the list stack (the extra entry
+		 * on the function stack is added in ast_list_generator_map). there
+		 * must be a better way - but i am an idiot. */
+		if ((pp_tmp = cop_salloc(p_alloc, sizeof(struct ast_node *) * (stack_sizex+1), 0)) == NULL)
+			return ejson_error_null(p_error_handler, "out of memory\n");
+		if (stack_sizex)
+			memcpy(pp_tmp, pp_stackx, stack_sizex * sizeof(struct ast_node *));
+		pp_tmp[stack_sizex] = NULL; /* if anything ever tries to access it - EXPLODE */
+
+		if ((p_list = evaluate_ast(p_src->d.map.p_input_list, pp_tmp, stack_sizex+1, p_alloc, p_error_handler)) == NULL)
 			return NULL;
 		if (p_list->cls != &AST_CLS_LIST_GENERATOR)
 			return ejson_location_error_null(p_error_handler, &(p_src->doc_pos), "map expected a list argument following the function\n");

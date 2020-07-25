@@ -437,13 +437,20 @@ static int test_main(int argc, char *argv[]) {
 		,"[15,-2,3]"
 		,"map of functions"
 		);
-#if 0 /* oh boy i screwed this whole thing up. */
 	tests++; errors += run_test
-		("call func [c] (map func [x] call x [3,5] [func [a,b] c+a*b, func [a,b] a-b, func [a,b] a%b]) [10]"
-		,"[15,-2,3]"
+		("call\n"
+		 "  func [c]\n"
+		 "    map\n"
+		 "      func [x]\n"
+		 "        call x [3, 5]\n"
+		 "      [func [a, b] c+a*b\n"
+		 "      ,func [a, b] c+a-b\n"
+		 "      ,func [a, b] c+a%b\n"
+		 "      ]\n"
+		 "  [10]"
+		,"[25,8,13]"
 		,"map of functions in a call"
 		);
-#endif
 
 	/* define tests */
 	tests++; errors += run_test
@@ -529,6 +536,21 @@ static int test_main(int argc, char *argv[]) {
 		("map func[x] x <= 2 range [5]"
 		,"[true, true, true, false, false]"
 		,"map of comparison result"
+		);
+	tests++; errors += run_test
+		("call call call func [a, b] func [c] func [d, e, f] [a, b, c, d, e, f] [1, 2] [3] [4, 5, 6]"
+		,"[1,2,3,4,5,6]"
+		,"order of nested function arguments pushed onto the stack"
+		);
+	tests++; errors += run_test
+		("call func [a] (map func [c] c * a [3, 5]) [1]"
+		,"[3, 5]"
+		,"mixing of call and map"
+		);
+	tests++; errors += run_test
+		("call func [a, b] (map func [c] c * a + b [3, 5]) [1, 2]"
+		,"[5, 7]"
+		,"mixing of call and map"
 		);
 
 	/* format tests */
