@@ -7,7 +7,12 @@
 #include <math.h>
 #include "parse_helpers.h"
 
-/* TODO: remove llist from ast - immediately resolve it to a lgen class during building of the tree. */
+/* IDEA: the evaluate ast function should return a pointer to an evaluated ast node object.
+ *
+ * The AST node object should contain an evaluated ast node structure in the union to hold
+ * completely reduced items.
+ * 
+ * Or maybe this would just be messy? */
 
 #define MAX_TOK_STRING (4096)
 
