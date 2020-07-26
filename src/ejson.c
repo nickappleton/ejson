@@ -76,6 +76,20 @@ struct ast_cls {
 #define DEF_AST_CLS(name_, to_jnode_fn_, debug_print_fn_) \
 	static const struct ast_cls name_ = { #name_, to_jnode_fn_, debug_print_fn_ }
 
+#define EJSON_TYPE_NULL     (0)
+#define EJSON_TYPE_STRING   (1)
+#define EJSON_TYPE_INTEGER  (2)
+#define EJSON_TYPE_REAL     (3)
+#define EJSON_TYPE_BOOL     (4)
+#define EJSON_TYPE_DICT     (5)
+#define EJSON_TYPE_LIST     (6)
+#define EJSON_TYPE_FUNCTION (7)
+
+struct ev_ast_node {
+	const struct ast_node *p_node;
+
+};
+
 struct ast_node {
 	const struct ast_cls  *cls;
 	struct token_pos_info  doc_pos;
@@ -930,7 +944,7 @@ struct execution_context {
 
 };
 
-const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct ast_node **pp_stackx, unsigned stack_sizex, struct cop_salloc_iface *p_alloc, const struct ejson_error_handler *p_error_handler);
+static int evaluate_ast(struct ev_ast_node *p_dest, const struct ast_node *p_src, const struct ast_node **pp_stackx, unsigned stack_sizex, struct cop_salloc_iface *p_alloc, const struct ejson_error_handler *p_error_handler);
 
 struct lrange {
 	long long first;
@@ -955,12 +969,13 @@ const struct ast_node *ast_list_generator_get_element(const struct ast_node *p_l
 }
 
 const struct ast_node *get_literal_element_fn(const struct ast_node *p_src, unsigned element, struct cop_salloc_iface *p_alloc, const struct ejson_error_handler *p_error_handler) {
+	struct ev_ast_node n;
 	assert(p_src->cls == &AST_CLS_LIST_GENERATOR);
 	if (element >= p_src->d.lgen.nb_elements)
 		return (ejson_error(p_error_handler, "list index out of bounds\n"), NULL);
-	if ((p_src = evaluate_ast(p_src->d.lgen.d.literal.pp_values[element], p_src->d.lgen.pp_stack, p_src->d.lgen.stack_size, p_alloc, p_error_handler)) == NULL)
+	if (evaluate_ast(&n, p_src->d.lgen.d.literal.pp_values[element], p_src->d.lgen.pp_stack, p_src->d.lgen.stack_size, p_alloc, p_error_handler))
 		return NULL;
-	return p_src;
+	return n.p_node;
 }
 
 const struct ast_node *get_list_cat(const struct ast_node *p_src, unsigned element, struct cop_salloc_iface *p_alloc, const struct ejson_error_handler *p_error_handler) {
@@ -982,6 +997,7 @@ const struct ast_node *ast_list_generator_map(const struct ast_node *p_src, unsi
 	const struct ast_node **pp_tmp;
 	const struct ast_node *p_function;
 	const struct ast_node *p_list;
+	struct ev_ast_node n;
 
 	assert(p_src->cls == &AST_CLS_LIST_GENERATOR);
 	p_function = p_src->d.lgen.d.map.p_function;
@@ -1002,10 +1018,13 @@ const struct ast_node *ast_list_generator_map(const struct ast_node *p_src, unsi
 		memcpy(pp_tmp, p_function->d.fn.pp_stack, p_function->d.fn.stack_size * sizeof(struct ast_node *));
 	pp_tmp[p_function->d.fn.stack_size] = p_argument;
 
-	return evaluate_ast(p_function->d.fn.node, pp_tmp, p_function->d.fn.stack_size + 1, p_alloc, p_error_handler);
+	if (evaluate_ast(&n, p_function->d.fn.node, pp_tmp, p_function->d.fn.stack_size + 1, p_alloc, p_error_handler))
+		return NULL;
+
+	return n.p_node;
 }
 
-const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct ast_node **pp_stackx, unsigned stack_sizex, struct cop_salloc_iface *p_alloc, const struct ejson_error_handler *p_error_handler) {
+static int evaluate_ast(struct ev_ast_node *p_dest, const struct ast_node *p_src, const struct ast_node **pp_stackx, unsigned stack_sizex, struct cop_salloc_iface *p_alloc, const struct ejson_error_handler *p_error_handler) {
 	/* Move through stack references. */
 	assert(p_src != NULL);
 	while (p_src->cls == &AST_CLS_STACKREF) {
@@ -1026,30 +1045,35 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 	    ||  p_src->cls == &AST_CLS_LIST_GENERATOR
 	    ||  p_src->cls == &AST_CLS_READY_DICT
 	    ) {
-		return p_src;
+		p_dest->p_node = p_src;
+		return 0;
 	}
 
 	if (p_src->cls == &AST_CLS_FUNCTION) {
 		struct ast_node *p_ret;
 		//FIXME??? WHY CAN THIS NOT BE ASSERTED?  assert(p_src->d.fn.pp_stack == NULL);
-		if (stack_sizex == 0)
-			return p_src;
+		if (stack_sizex == 0) {
+			p_dest->p_node = p_src;
+			return 0;
+		}
 		if ((p_ret = cop_salloc(p_alloc, sizeof(struct ast_node), 0)) == NULL)
-			return ejson_error_null(p_error_handler, "out of memory\n");
+			return ejson_error(p_error_handler, "out of memory\n");
 		p_ret->cls             = p_src->cls;
 		p_ret->doc_pos         = p_src->doc_pos;
 		p_ret->d.fn.nb_args    = p_src->d.fn.nb_args;
 		p_ret->d.fn.node       = p_src->d.fn.node;
 		p_ret->d.fn.stack_size = stack_sizex;
 		p_ret->d.fn.pp_stack   = pp_stackx;
-		return p_ret;
+
+		p_dest->p_node = p_ret;
+		return 0;
 	}
 
 	/* Convert lists into list generators - fixme: this should happen while building the ast. */
 	if  (p_src->cls == &AST_CLS_LITERAL_LIST) {
 		struct ast_node *p_ret;
 		if ((p_ret = cop_salloc(p_alloc, sizeof(struct ast_node), 0)) == NULL)
-			return ejson_error_null(p_error_handler, "out of memory\n");
+			return ejson_error(p_error_handler, "out of memory\n");
 		p_ret->cls                        = &AST_CLS_LIST_GENERATOR;
 		p_ret->doc_pos                    = p_src->doc_pos;
 		p_ret->d.lgen.pp_stack            = pp_stackx;
@@ -1057,7 +1081,9 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		p_ret->d.lgen.nb_elements         = p_src->d.llist.nb_elements;
 		p_ret->d.lgen.d.literal.pp_values = p_src->d.llist.elements;
 		p_ret->d.lgen.get_element         = get_literal_element_fn;
-		return p_ret;
+
+		p_dest->p_node = p_ret;
+		return 0;
 	}
 
 	if (p_src->cls == &AST_CLS_FORMAT) {
@@ -1070,15 +1096,17 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		const char *cp;
 		char *ob;
 		char c;
+		struct ev_ast_node n;
 
-		if ((p_args = evaluate_ast(p_src->d.builtin.p_args, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
-			return NULL;
+		if (evaluate_ast(&n, p_src->d.builtin.p_args, pp_stackx, stack_sizex, p_alloc, p_error_handler))
+			return -1;
+		p_args = n.p_node;
 		if (p_args->cls != &AST_CLS_LIST_GENERATOR || p_args->d.lgen.nb_elements < 1)
-			return (ejson_error(p_error_handler, "format expects a list argument with at least a format string\n"), NULL);
+			return ejson_error(p_error_handler, "format expects a list argument with at least a format string\n");
 		if ((p_fmtstr = p_args->d.lgen.get_element(p_args, 0, p_alloc, p_error_handler)) == NULL)
-			return NULL;
+			return -1;
 		if (p_fmtstr->cls != &AST_CLS_LITERAL_STRING)
-			return (ejson_error(p_error_handler, "first argument of format must be a string\n"), NULL);
+			return ejson_error(p_error_handler, "first argument of format must be a string\n");
 		
 		cp = p_fmtstr->d.str.p_data;
 		i = 0;
@@ -1101,7 +1129,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 					if (c == '+' || c == '-' || c == '0') {
 						fmtspec[specpos++] = c;
 					} else {
-						return (ejson_error(p_error_handler, "unsupported format flag '%c'\n", c), NULL);
+						return ejson_error(p_error_handler, "unsupported format flag '%c'\n", c);
 					}
 					c = *cp++;
 				}
@@ -1112,11 +1140,11 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 				} else if (c == 'd') {
 					const struct ast_node *p_argval;
 					if (argidx >= p_args->d.lgen.nb_elements)
-						return (ejson_error(p_error_handler, "not enough arguments given to format\n"), NULL);
+						return ejson_error(p_error_handler, "not enough arguments given to format\n");
 					if ((p_argval = p_args->d.lgen.get_element(p_args, argidx++, p_alloc, p_error_handler)) == NULL)
-						return NULL;
+						return -1;
 					if (p_argval->cls != &AST_CLS_LITERAL_INT)
-						return (ejson_error(p_error_handler, "%%d expects an integer argument\n"), NULL);
+						return ejson_error(p_error_handler, "%%d expects an integer argument\n");
 					fmtspec[specpos++] = 'l';
 					fmtspec[specpos++] = 'l';
 					fmtspec[specpos++] = 'd';
@@ -1125,15 +1153,15 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 				} else if (c == 's') {
 					const struct ast_node *p_argval;
 					if (argidx >= p_args->d.lgen.nb_elements)
-						return (ejson_error(p_error_handler, "not enough arguments given to format\n"), NULL);
+						return ejson_error(p_error_handler, "not enough arguments given to format\n");
 					if ((p_argval = p_args->d.lgen.get_element(p_args, argidx++, p_alloc, p_error_handler)) == NULL)
-						return NULL;
+						return -1;
 					if (p_argval->cls != &AST_CLS_LITERAL_STRING)
-						return (ejson_error(p_error_handler, "%%s expects a string argument (%s)\n", p_argval->cls->p_name), NULL);
+						return ejson_error(p_error_handler, "%%s expects a string argument (%s)\n", p_argval->cls->p_name);
 					memcpy(&(strbuf[i]), p_argval->d.str.p_data, p_argval->d.str.len);
 					i += p_argval->d.str.len;
 				} else {
-					return (ejson_error(p_error_handler, "invalid escape sequence (%%%c)\n", c), NULL);
+					return ejson_error(p_error_handler, "invalid escape sequence (%%%c)\n", c);
 				}
 			} else {
 				strbuf[i] = c;
@@ -1143,7 +1171,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		strbuf[i] = '\0';
 
 		if ((p_ret = cop_salloc(p_alloc, sizeof(struct ast_node) + i + 1, 0)) == NULL)
-			return NULL;
+			return -1;
 		ob = (char *)(p_ret + 1);
 		memcpy(ob, strbuf, i+1);
 
@@ -1151,7 +1179,9 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		p_ret->doc_pos      = p_src->doc_pos;
 		p_ret->d.str.p_data = ob;
 		p_ret->d.str.len    = i;
-		return p_ret;
+
+		p_dest->p_node = p_ret;
+		return 0;
 	}
 
 	if  (p_src->cls == &AST_CLS_LITERAL_DICT) {
@@ -1164,66 +1194,81 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 			const struct ast_node *p_key;
 			struct cop_strh key;
 			struct dictnode *p_dn;
-			
-			if ((p_key = evaluate_ast(p_src->d.ldict.elements[2*i+0], pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
-				return NULL;
+			struct ev_ast_node p;
+
+			if (evaluate_ast(&p, p_src->d.ldict.elements[2*i+0], pp_stackx, stack_sizex, p_alloc, p_error_handler))
+				return -1;
+			p_key = p.p_node;
 			if (p_key->cls != &AST_CLS_LITERAL_STRING)
-				return ejson_location_error_null(p_error_handler, &(p_src->doc_pos), "a key expression in the dictionary did not evaluate to a string\n");
+				return ejson_location_error(p_error_handler, &(p_src->doc_pos), "a key expression in the dictionary did not evaluate to a string\n");
 
 			/* fixme: there is no need to keep another copy of the string. ideally, we would have a separate stack as we don't need to keep hold of the above node and all memory that was needed to figure it out */
 			cop_strh_init_shallow(&key, p_key->d.str.p_data);
 			if ((p_dn = cop_salloc(p_alloc, sizeof(struct dictnode) + key.len + 1, 0)) == NULL)
-				return ejson_error_null(p_error_handler, "out of memory\n");
+				return ejson_error(p_error_handler, "out of memory\n");
 			memcpy(p_dn + 1, key.ptr, key.len + 1);
 			key.ptr = (unsigned char *)(p_dn + 1);
 			cop_strdict_node_init(&(p_dn->node), &key, p_dn);
 			p_dn->data = p_src->d.ldict.elements[2*i+1];
 
 			if (cop_strdict_insert(&p_root, &(p_dn->node)))
-				return ejson_location_error_null(p_error_handler, &(p_src->d.ldict.elements[2*i+0]->doc_pos), "attempted to add a key to a dictionary that already existed (%s)\n", p_key->d.str.p_data);
+				return ejson_location_error(p_error_handler, &(p_src->d.ldict.elements[2*i+0]->doc_pos), "attempted to add a key to a dictionary that already existed (%s)\n", p_key->d.str.p_data);
 		}
 
 		if ((p_ret = cop_salloc(p_alloc, sizeof(struct ast_node), 0)) == NULL)
-			return ejson_error_null(p_error_handler, "out of memory\n");
+			return ejson_error(p_error_handler, "out of memory\n");
 		p_ret->cls                = &AST_CLS_READY_DICT;
 		p_ret->doc_pos            = p_src->doc_pos;
 		p_ret->d.rdict.pp_stack   = pp_stackx;
 		p_ret->d.rdict.stack_size = stack_sizex;
 		p_ret->d.rdict.nb_keys    = p_src->d.ldict.nb_keys;
 		p_ret->d.rdict.p_root     = p_root;
-		return p_ret;
+
+		p_dest->p_node = p_ret;
+		return 0;
 	}
 
 	if (p_src->cls == &AST_CLS_ACCESS) {
 		const struct ast_node *p_list;
-		if ((p_list = evaluate_ast(p_src->d.access.p_data, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
-			return NULL;
+		struct ev_ast_node p;
+
+		if (evaluate_ast(&p, p_src->d.access.p_data, pp_stackx, stack_sizex, p_alloc, p_error_handler))
+			return -1;
+		p_list = p.p_node;
+
 		if (p_list->cls == &AST_CLS_LIST_GENERATOR) {
 			const struct ast_node *p_idx;
 			long long idx;
 			size_t save = cop_salloc_save(p_alloc);
-			if ((p_idx = evaluate_ast(p_src->d.access.p_key, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
-				return NULL;
+
+			if (evaluate_ast(&p, p_src->d.access.p_key, pp_stackx, stack_sizex, p_alloc, p_error_handler))
+				return -1;
+			p_idx = p.p_node;
+
 			if (p_idx->cls != &AST_CLS_LITERAL_INT)
-				return ejson_location_error_null(p_error_handler, &(p_src->d.access.p_key->doc_pos), "the key expression for a list access did not evaluate to an integer\n");
+				return ejson_location_error(p_error_handler, &(p_src->d.access.p_key->doc_pos), "the key expression for a list access did not evaluate to an integer\n");
 			idx = p_idx->d.i;
 			cop_salloc_restore(p_alloc, save);
-			return p_list->d.lgen.get_element(p_list, idx, p_alloc, p_error_handler);
+
+			p_dest->p_node = p_list->d.lgen.get_element(p_list, idx, p_alloc, p_error_handler);
+			return p_dest->p_node ? 0 : -1;
 		}
 		
 		if (p_list->cls == &AST_CLS_READY_DICT) {
 			const struct ast_node *p_key;
 			struct dictnode *p_node;
-			if ((p_key = evaluate_ast(p_src->d.access.p_key, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
-				return NULL;
+
+			if (evaluate_ast(&p, p_src->d.access.p_key, pp_stackx, stack_sizex, p_alloc, p_error_handler))
+				return -1;
+			p_key = p.p_node;
 			if (p_key->cls != &AST_CLS_LITERAL_STRING)
-				return ejson_location_error_null(p_error_handler, &(p_src->d.access.p_key->doc_pos), "the key expression for dict access did not evaluate to a string\n");
+				return ejson_location_error(p_error_handler, &(p_src->d.access.p_key->doc_pos), "the key expression for dict access did not evaluate to a string\n");
 			if (cop_strdict_get_by_cstr(p_list->d.rdict.p_root, p_key->d.str.p_data, (void **)&p_node))
-				return ejson_location_error_null(p_error_handler, &(p_src->d.access.p_key->doc_pos), "key '%s' not in dict\n", p_key->d.str.p_data);
-			return evaluate_ast(p_node->data, pp_stackx, stack_sizex, p_alloc, p_error_handler);
+				return ejson_location_error(p_error_handler, &(p_src->d.access.p_key->doc_pos), "key '%s' not in dict\n", p_key->d.str.p_data);
+			return evaluate_ast(p_dest, p_node->data, pp_stackx, stack_sizex, p_alloc, p_error_handler);
 		}
 
-		return ejson_location_error_null(p_error_handler, &(p_src->d.access.p_data->doc_pos), "the list expression for access did not evaluate to a list or a dictionary\n");
+		return ejson_location_error(p_error_handler, &(p_src->d.access.p_data->doc_pos), "the list expression for access did not evaluate to a list or a dictionary\n");
 	}
 
 	/* Function call */
@@ -1231,31 +1276,34 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		const struct ast_node  *p_function;
 		const struct ast_node  *p_args;
 		const struct ast_node **pp_stack2;
+		struct ev_ast_node p;
 
-		if ((p_function = evaluate_ast(p_src->d.call.fn, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
-			return NULL;
+		if (evaluate_ast(&p, p_src->d.call.fn, pp_stackx, stack_sizex, p_alloc, p_error_handler))
+			return -1;
+		p_function = p.p_node;
 		if (p_function->cls != &AST_CLS_FUNCTION)
-			return ejson_error_null(p_error_handler, "the function expression for call did not evaluate to a function\n");
-		if ((p_args = evaluate_ast(p_src->d.call.p_args, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
-			return NULL;
+			return ejson_error(p_error_handler, "the function expression for call did not evaluate to a function\n");
+		if (evaluate_ast(&p, p_src->d.call.p_args, pp_stackx, stack_sizex, p_alloc, p_error_handler))
+			return -1;
+		p_args = p.p_node;
 		if (p_args->cls != &AST_CLS_LIST_GENERATOR)
-			return ejson_error_null(p_error_handler, "the argument expression for call did not evaluate to a list\n");
+			return ejson_error(p_error_handler, "the argument expression for call did not evaluate to a list\n");
 		if (p_args->d.lgen.nb_elements != p_function->d.fn.nb_args)
-			return ejson_location_error_null(p_error_handler, &(p_src->doc_pos), "the number of arguments supplied to function was incorrect (expected %u but got %u)\n", p_function->d.fn.nb_args, p_args->d.lgen.nb_elements);
+			return ejson_location_error(p_error_handler, &(p_src->doc_pos), "the number of arguments supplied to function was incorrect (expected %u but got %u)\n", p_function->d.fn.nb_args, p_args->d.lgen.nb_elements);
 
 		pp_stack2 = p_function->d.fn.pp_stack;
 		if (p_args->d.lgen.nb_elements) {
 			unsigned i;
 			if ((pp_stack2 = cop_salloc(p_alloc, sizeof(struct ast_node *) * (p_function->d.fn.stack_size + p_args->d.lgen.nb_elements), 0)) == NULL)
-				return ejson_error_null(p_error_handler, "out of memory\n");
+				return ejson_error(p_error_handler, "out of memory\n");
 			if (p_function->d.fn.stack_size)
 				memcpy(pp_stack2, p_function->d.fn.pp_stack, p_function->d.fn.stack_size * sizeof(struct ast_node *));
 			for (i = 0; i < p_args->d.lgen.nb_elements; i++) {
 				if ((pp_stack2[p_function->d.fn.stack_size + i] = p_args->d.lgen.get_element(p_args, i, p_alloc, p_error_handler)) == NULL)
-					return ejson_error_null(p_error_handler, "failed to evaluate list element %d because\n", i);
+					return ejson_error(p_error_handler, "failed to evaluate list element %d because\n", i);
 			}
 		}
-		return evaluate_ast(p_function->d.fn.node, pp_stack2, p_function->d.fn.stack_size + p_args->d.lgen.nb_elements, p_alloc, p_error_handler);
+		return evaluate_ast(p_dest, p_function->d.fn.node, pp_stack2, p_function->d.fn.stack_size + p_args->d.lgen.nb_elements, p_alloc, p_error_handler);
 	}
 
 	/* Unary negation */
@@ -1263,39 +1311,46 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		const struct ast_node *p_result;
 		struct ast_node       *p_tmp2;
 		size_t                 save;
+		struct ev_ast_node     p;
 
 		if ((p_tmp2 = cop_salloc(p_alloc, sizeof(struct ast_node), 0)) == NULL)
-			return ejson_error_null(p_error_handler, "out of memory\n");
+			return ejson_error(p_error_handler, "out of memory\n");
 		save = cop_salloc_save(p_alloc);
-		if ((p_result = evaluate_ast(p_src->d.binop.p_lhs, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
-			return NULL;
+
+
+		if (evaluate_ast(&p, p_src->d.binop.p_lhs, pp_stackx, stack_sizex, p_alloc, p_error_handler))
+			return -1;
+		p_result = p.p_node;
 
 		if (p_src->cls == &AST_CLS_NEG) {
 			if (p_result->cls == &AST_CLS_LITERAL_INT) {
 				p_tmp2->cls = &AST_CLS_LITERAL_INT;
 				p_tmp2->d.i = -p_result->d.i;
 				cop_salloc_restore(p_alloc, save);
-				return p_tmp2;
+				p_dest->p_node = p_tmp2;
+				return 0;
 			}
 
 			if (p_result->cls == &AST_CLS_LITERAL_FLOAT) {
 				p_tmp2->cls = &AST_CLS_LITERAL_FLOAT;
 				p_tmp2->d.f = -p_result->d.f;
 				cop_salloc_restore(p_alloc, save);
-				return p_tmp2;
+				p_dest->p_node = p_tmp2;
+				return 0;
 			}
 
-			return ejson_location_error_null(p_error_handler, &(p_src->doc_pos), "the expression for the unary negation operator did not evaluate to a numeric type\n");
+			return ejson_location_error(p_error_handler, &(p_src->doc_pos), "the expression for the unary negation operator did not evaluate to a numeric type\n");
 		}
 
 		if (p_result->cls == &AST_CLS_LITERAL_BOOL) {
 			p_tmp2->cls = &AST_CLS_LITERAL_BOOL;
 			p_tmp2->d.i = !p_result->d.i;
 			cop_salloc_restore(p_alloc, save);
-			return p_tmp2;
+			p_dest->p_node = p_tmp2;
+			return 0;
 		}
 
-		return ejson_location_error_null(p_error_handler, &(p_src->doc_pos), "the expression for the unary not operator did not evaluate to a boolean type\n");
+		return ejson_location_error(p_error_handler, &(p_src->doc_pos), "the expression for the unary not operator did not evaluate to a boolean type\n");
 	}
 
 	/* Convert range into an accessor object */
@@ -1304,24 +1359,26 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		size_t                 save;
 		struct lrange          lrange;
 		const struct ast_node *p_args;
+		struct ev_ast_node     p;
 
 		if ((p_result = cop_salloc(p_alloc, sizeof(struct ast_node), 0)) == NULL)
-			return ejson_error_null(p_error_handler, "out of memory\n");
+			return ejson_error(p_error_handler, "out of memory\n");
 		save = cop_salloc_save(p_alloc);
-		if ((p_args = evaluate_ast(p_src->d.builtin.p_args, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
-			return NULL;
+		if (evaluate_ast(&p, p_src->d.builtin.p_args, pp_stackx, stack_sizex, p_alloc, p_error_handler))
+			return -1;
+		p_args = p.p_node;
 		if (p_args->cls != &AST_CLS_LIST_GENERATOR)
-			return ejson_location_error_null(p_error_handler, &(p_src->doc_pos), "range expects a list argument\n");
+			return ejson_location_error(p_error_handler, &(p_src->doc_pos), "range expects a list argument\n");
 		if (p_args->d.lgen.nb_elements < 1 || p_args->d.lgen.nb_elements > 3)
-			return ejson_location_error_null(p_error_handler, &(p_src->doc_pos), "range expects between 1 and 3 arguments\n");
+			return ejson_location_error(p_error_handler, &(p_src->doc_pos), "range expects between 1 and 3 arguments\n");
 
 		if (p_args->d.lgen.nb_elements == 1) {
 			const struct ast_node *p_first;
 
 			if ((p_first = p_args->d.lgen.get_element(p_args, 0, p_alloc, p_error_handler)) == NULL)
-				return NULL;
+				return -1;
 			if (p_first->cls != &AST_CLS_LITERAL_INT)
-				return (ejson_error(p_error_handler, "single argument range expects an integer number of items\n"), NULL);
+				return ejson_error(p_error_handler, "single argument range expects an integer number of items\n");
 
 			lrange.first     = 0;
 			lrange.step_size = 1;
@@ -1332,9 +1389,9 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 			if  (   (p_first = p_args->d.lgen.get_element(p_args, 0, p_alloc, p_error_handler)) == NULL
 			    ||  (p_last = p_args->d.lgen.get_element(p_args, 1, p_alloc, p_error_handler)) == NULL
 			    )
-				return NULL;
+				return -1;
 			if (p_first->cls != &AST_CLS_LITERAL_INT || p_last->cls != &AST_CLS_LITERAL_INT)
-				return (ejson_error(p_error_handler, "dual argument range expects an integer first and last index\n"), NULL);
+				return ejson_error(p_error_handler, "dual argument range expects an integer first and last index\n");
 
 			lrange.first     = p_first->d.i;
 			lrange.step_size = (p_first->d.i > p_last->d.i) ? -1 : 1;
@@ -1346,13 +1403,13 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 			    ||  (p_step = p_args->d.lgen.get_element(p_args, 1, p_alloc, p_error_handler)) == NULL
 			    ||  (p_last = p_args->d.lgen.get_element(p_args, 2, p_alloc, p_error_handler)) == NULL
 			    )
-				return NULL;
+				return -1;
 			if  (   p_first->cls != &AST_CLS_LITERAL_INT || p_step->cls != &AST_CLS_LITERAL_INT ||  p_last->cls != &AST_CLS_LITERAL_INT
 			    ||  p_step->d.i == 0
 			    ||  (p_step->d.i > 0 && (p_first->d.i > p_last->d.i))
 			    ||  (p_step->d.i < 0 && (p_first->d.i < p_last->d.i))
 			    )
-				return (ejson_error(p_error_handler, "triple argument range expects an integer first, step and last values. step must be non-zero and have the correct sign for the range.\n"), NULL);
+				return ejson_error(p_error_handler, "triple argument range expects an integer first, step and last values. step must be non-zero and have the correct sign for the range.\n");
 
 			lrange.first     = p_first->d.i;
 			lrange.step_size = p_step->d.i;
@@ -1369,18 +1426,21 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		p_result->d.lgen.nb_elements   = lrange.numel;
 		p_result->d.lgen.d.range.first = lrange.first;
 		p_result->d.lgen.d.range.step  = lrange.step_size;
-		return p_result;
+		p_dest->p_node = p_result;
+		return 0;
 	}
 
 	if (p_src->cls == &AST_CLS_MAP) {
 		const struct ast_node *p_function, *p_list;
 		struct ast_node *p_tmp;
 		const struct ast_node **pp_tmp;
-		
-		if ((p_function = evaluate_ast(p_src->d.map.p_function, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
-			return NULL;
+		struct ev_ast_node p;
+
+		if (evaluate_ast(&p, p_src->d.map.p_function, pp_stackx, stack_sizex, p_alloc, p_error_handler))
+			return -1;
+		p_function = p.p_node;
 		if (p_function->cls != &AST_CLS_FUNCTION || p_function->d.fn.nb_args != 1)
-			return ejson_location_error_null(p_error_handler, &(p_src->doc_pos), "map expects a function argument that takes one argument\n");
+			return ejson_location_error(p_error_handler, &(p_src->doc_pos), "map expects a function argument that takes one argument\n");
 
 		/* hoak hoak hoak... maps always increase the stack depth by one. this
 		 * is not always necessary. but because of how i handle stack
@@ -1388,15 +1448,16 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		 * on the function stack is added in ast_list_generator_map). there
 		 * must be a better way - but i am an idiot. */
 		if ((pp_tmp = cop_salloc(p_alloc, sizeof(struct ast_node *) * (stack_sizex+1), 0)) == NULL)
-			return ejson_error_null(p_error_handler, "out of memory\n");
+			return ejson_error(p_error_handler, "out of memory\n");
 		if (stack_sizex)
 			memcpy(pp_tmp, pp_stackx, stack_sizex * sizeof(struct ast_node *));
 		pp_tmp[stack_sizex] = NULL; /* if anything ever tries to access it - EXPLODE */
 
-		if ((p_list = evaluate_ast(p_src->d.map.p_input_list, pp_tmp, stack_sizex+1, p_alloc, p_error_handler)) == NULL)
-			return NULL;
+		if (evaluate_ast(&p, p_src->d.map.p_input_list, pp_tmp, stack_sizex+1, p_alloc, p_error_handler))
+			return -1;
+		p_list = p.p_node;
 		if (p_list->cls != &AST_CLS_LIST_GENERATOR)
-			return ejson_location_error_null(p_error_handler, &(p_src->doc_pos), "map expected a list argument following the function\n");
+			return ejson_location_error(p_error_handler, &(p_src->doc_pos), "map expected a list argument following the function\n");
 
 		p_tmp = cop_salloc(p_alloc, sizeof(struct ast_node), 0);
 		p_tmp->cls                     = &AST_CLS_LIST_GENERATOR;
@@ -1407,7 +1468,8 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		p_tmp->d.lgen.d.map.p_key      = p_list;
 		p_tmp->d.lgen.get_element      = ast_list_generator_map;
 		p_tmp->d.lgen.nb_elements      = p_list->d.lgen.nb_elements;
-		return p_tmp;
+		p_dest->p_node = p_tmp;
+		return 0;
 	}
 
 	/* Ops */
@@ -1421,51 +1483,59 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 		const struct ast_node *p_rhs;
 		struct ast_node *p_ret;
 		size_t save;
-		
+		struct ev_ast_node lhs;
+		struct ev_ast_node rhs;
+
 		if ((p_ret = cop_salloc(p_alloc, sizeof(struct ast_node), 0)) == NULL)
-			return ejson_error_null(p_error_handler, "out of memory\n");
+			return ejson_error(p_error_handler, "out of memory\n");
 		p_ret->doc_pos = p_src->doc_pos;
 
 		save = cop_salloc_save(p_alloc);
 
-		if ((p_lhs = evaluate_ast(p_src->d.binop.p_lhs, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
-			return NULL;
-		if ((p_rhs = evaluate_ast(p_src->d.binop.p_rhs, pp_stackx, stack_sizex, p_alloc, p_error_handler)) == NULL)
-			return NULL;
+		if (evaluate_ast(&lhs, p_src->d.binop.p_lhs, pp_stackx, stack_sizex, p_alloc, p_error_handler))
+			return -1;
+		if (evaluate_ast(&rhs, p_src->d.binop.p_rhs, pp_stackx, stack_sizex, p_alloc, p_error_handler))
+			return -1;
+
+		p_lhs = lhs.p_node;
+		p_rhs = rhs.p_node;
 
 		if (p_src->cls == &AST_CLS_LOGAND || p_src->cls == &AST_CLS_LOGOR) {
 			if (p_lhs->cls != &AST_CLS_LITERAL_BOOL)
-				return ejson_location_error_null(p_error_handler, &p_src->doc_pos, "lhs of logical operator was not boolean\n");
+				return ejson_location_error(p_error_handler, &p_src->doc_pos, "lhs of logical operator was not boolean\n");
 			if (p_rhs->cls != &AST_CLS_LITERAL_BOOL)
-				return ejson_location_error_null(p_error_handler, &p_src->doc_pos, "rhs of logical operator was not boolean\n");
+				return ejson_location_error(p_error_handler, &p_src->doc_pos, "rhs of logical operator was not boolean\n");
 			p_ret->cls = &AST_CLS_LITERAL_BOOL;
 			p_ret->d.i = (p_src->cls == &AST_CLS_LOGAND) ? (p_lhs->d.i && p_rhs->d.i) : (p_lhs->d.i || p_rhs->d.i);
-			return p_ret;
+			p_dest->p_node = p_ret;
+			return 0;
 		}
 
 		if (p_src->cls == &AST_CLS_BITAND || p_src->cls == &AST_CLS_BITOR) {
 			if (p_lhs->cls != &AST_CLS_LITERAL_INT)
-				return ejson_location_error_null(p_error_handler, &p_src->doc_pos, "lhs of bitwise operator was not integer\n");
+				return ejson_location_error(p_error_handler, &p_src->doc_pos, "lhs of bitwise operator was not integer\n");
 			if (p_rhs->cls != &AST_CLS_LITERAL_INT)
-				return ejson_location_error_null(p_error_handler, &p_src->doc_pos, "rhs of bitwise operator was not integer\n");
+				return ejson_location_error(p_error_handler, &p_src->doc_pos, "rhs of bitwise operator was not integer\n");
 			p_ret->cls = &AST_CLS_LITERAL_INT;
 			p_ret->d.i = (p_src->cls == &AST_CLS_BITAND) ? (p_lhs->d.i & p_rhs->d.i) : (p_lhs->d.i | p_rhs->d.i);
-			return p_ret;
+			p_dest->p_node = p_ret;
+			return 0;
 		}
 
 		if ((p_src->cls == &AST_CLS_EQ || p_src->cls == &AST_CLS_NEQ) && (p_lhs->cls == &AST_CLS_LITERAL_BOOL || p_rhs->cls == &AST_CLS_LITERAL_BOOL)) {
 			if (p_lhs->cls != &AST_CLS_LITERAL_BOOL)
-				return ejson_location_error_null(p_error_handler, &p_src->doc_pos, "lhs must be boolean if rhs is\n");
+				return ejson_location_error(p_error_handler, &p_src->doc_pos, "lhs must be boolean if rhs is\n");
 			if (p_rhs->cls != &AST_CLS_LITERAL_BOOL)
-				return ejson_location_error_null(p_error_handler, &p_src->doc_pos, "rhs must be boolean if lhs is\n");
+				return ejson_location_error(p_error_handler, &p_src->doc_pos, "rhs must be boolean if lhs is\n");
 			p_ret->cls = &AST_CLS_LITERAL_BOOL;
 			p_ret->d.i = (p_src->cls == &AST_CLS_EQ) ? (!p_lhs->d.i == !p_rhs->d.i) : (p_lhs->d.i != p_rhs->d.i);
-			return p_ret;
+			p_dest->p_node = p_ret;
+			return 0;
 		}
 
 		if (p_src->cls == &AST_CLS_ADD && (p_lhs->cls == &AST_CLS_LIST_GENERATOR || p_rhs->cls == &AST_CLS_LIST_GENERATOR)) {
 			if (p_lhs->cls != p_rhs->cls)
-				return ejson_location_error_null(p_error_handler, &p_src->doc_pos, "expected lhs and rhs to both be lists\n");
+				return ejson_location_error(p_error_handler, &p_src->doc_pos, "expected lhs and rhs to both be lists\n");
 			p_ret->cls                   = &AST_CLS_LIST_GENERATOR;
 			p_ret->d.lgen.nb_elements    = p_lhs->d.lgen.nb_elements + p_rhs->d.lgen.nb_elements;
 			p_ret->d.lgen.pp_stack       = pp_stackx;
@@ -1473,7 +1543,8 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 			p_ret->d.lgen.get_element    = get_list_cat;
 			p_ret->d.lgen.d.cat.p_first  = p_lhs;
 			p_ret->d.lgen.d.cat.p_second = p_rhs;
-			return p_ret;
+			p_dest->p_node = p_ret;
+			return 0;
 		}
 
 		/* Promote types */
@@ -1485,14 +1556,14 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 			else if (p_lhs->cls == &AST_CLS_LITERAL_INT)
 				lhs = (double)(p_lhs->d.i);
 			else
-				return NULL;
+				return -1;
 
 			if (p_rhs->cls == &AST_CLS_LITERAL_FLOAT)
 				rhs = p_rhs->d.f;
 			else if (p_rhs->cls == &AST_CLS_LITERAL_INT)
 				rhs = (double)(p_rhs->d.i);
 			else
-				return NULL;
+				return -1;
 
 			cop_salloc_restore(p_alloc, save);
 
@@ -1533,7 +1604,8 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 				abort();
 			}
 
-			return p_ret;
+			p_dest->p_node = p_ret;
+			return 0;
 		}
 		
 		if (p_lhs->cls == &AST_CLS_LITERAL_INT && p_rhs->cls == &AST_CLS_LITERAL_INT) {
@@ -1579,10 +1651,11 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 				abort();
 			}
 
-			return p_ret;
+			p_dest->p_node = p_ret;
+			return 0;
 		}
 
-		return ejson_location_error_null(p_error_handler, &(p_ret->doc_pos), "the types given for binary operator %s were invalid (%s, %s)\n", p_src->cls->p_name, p_lhs->cls->p_name, p_rhs->cls->p_name);
+		return ejson_location_error(p_error_handler, &(p_ret->doc_pos), "the types given for binary operator %s were invalid (%s, %s)\n", p_src->cls->p_name, p_lhs->cls->p_name, p_rhs->cls->p_name);
 	}
 
 	fprintf(stderr, "what?\n");
@@ -1590,7 +1663,7 @@ const struct ast_node *evaluate_ast(const struct ast_node *p_src, const struct a
 	fprintf(stderr, "endwhat?\n");
 	abort();
 
-	return NULL;
+	return -1;
 }
 
 
@@ -1622,11 +1695,13 @@ static int enumerate_dict_keys2(void *p_context, struct cop_strdict_node *p_node
 	const struct ast_node *p_eval;
 	struct jnode           tmp;
 	int                    ret;
+	struct ev_ast_node     p;
 	p_dn = cop_strdict_node_to_data(p_node);
 	cop_strdict_node_to_key(p_node, &key);
 	save = cop_salloc_save(p_eargs->p_alloc);
-	if ((p_eval = evaluate_ast(p_dn->data, p_eargs->pp_stack, p_eargs->stack_size, p_eargs->p_alloc, p_eargs->p_handler)) == NULL)
+	if (evaluate_ast(&p, p_dn->data, p_eargs->pp_stack, p_eargs->stack_size, p_eargs->p_alloc, p_eargs->p_handler))
 		return -1;
+	p_eval = p.p_node;
 	if (to_jnode(&tmp, p_eval, p_eargs->p_alloc, p_eargs->p_handler))
 		return -1;
 	ret = p_eargs->p_fn(&tmp, (char *)key.ptr, p_eargs->p_user_context);
@@ -1650,11 +1725,12 @@ static int jnode_get_dict_element(struct jnode *p_dest, void *p_ctx, struct cop_
 	struct execution_context *ec = p_ctx;
 	struct dictnode          *dn;
 	const struct ast_node    *prval;
+	struct ev_ast_node        p;
 	if (cop_strdict_get_by_cstr(ec->p_object->d.rdict.p_root, p_key, (void **)&dn))
 		return 1; /* Not found */
-	prval = evaluate_ast(dn->data, ec->p_object->d.rdict.pp_stack, ec->p_object->d.rdict.stack_size, p_alloc, ec->p_error_handler);
-	if (prval == NULL)
-		return -1; /* Error */
+	if (evaluate_ast(&p, dn->data, ec->p_object->d.rdict.pp_stack, ec->p_object->d.rdict.stack_size, p_alloc, ec->p_error_handler))
+		return -1;
+	prval = p.p_node;
 	return to_jnode(p_dest, prval, p_alloc, ec->p_error_handler);
 }
 
@@ -1720,7 +1796,7 @@ int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace,
 	const struct ast_node *p_obj;
 	const struct ast_node *p_root;
 	const struct token *p_token;
-
+	struct ev_ast_node p;
 	while ((p_token = tok_peek(p_tokeniser)) != NULL && p_token->cls == &TOK_DEFINE) {
 		struct cop_strh ident;
 		struct cop_strdict_node *p_wsnode;
@@ -1760,8 +1836,9 @@ int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace,
 	printf("---\n");
 	p_obj->cls->debug_print(p_obj, stdout, 0);
 #endif
-	if ((p_root = evaluate_ast(p_obj, NULL, 0, p_workspace->p_alloc, p_error_handler)) == NULL)
+	if (evaluate_ast(&p, p_obj, NULL, 0, p_workspace->p_alloc, p_error_handler))
 		return 1;
+	p_root = p.p_node;
 	if (to_jnode(p_node, p_root, p_workspace->p_alloc, p_error_handler))
 		return 1;
 	return 0;
