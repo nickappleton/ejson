@@ -109,6 +109,11 @@ struct ast_node {
 			const char             *p_data;
 		} str; /* AST_CLS_LITERAL_STRING */
 		struct {
+			const struct ast_node  *p_test;
+			const struct ast_node  *p_true;
+			const struct ast_node  *p_false;
+		} ifexpr; /* AST_CLS_NEG*, AST_CLS_ADD*, AST_CLS_SUB*, AST_CLS_MUL*, AST_CLS_DIV*, AST_CLS_MOD* */
+		struct {
 			const struct ast_node  *p_lhs;
 			const struct ast_node  *p_rhs;
 		} binop; /* AST_CLS_NEG*, AST_CLS_ADD*, AST_CLS_SUB*, AST_CLS_MUL*, AST_CLS_DIV*, AST_CLS_MOD* */
@@ -251,6 +256,13 @@ static void debug_ready_dict(const struct ast_node *p_node, FILE *p_f, unsigned 
 	fprintf(p_f, "%*s%s\n", depth, "", p_node->cls->p_name);
 	/* TODO */
 }
+static void debug_print_ifexpr(const struct ast_node *p_node, FILE *p_f, unsigned depth) {
+	fprintf(p_f, "%*s%s\n", depth, "", p_node->cls->p_name);
+	p_node->d.ifexpr.p_test->cls->debug_print(p_node->d.ifexpr.p_test, p_f, depth + 1);
+	p_node->d.ifexpr.p_true->cls->debug_print(p_node->d.ifexpr.p_true, p_f, depth + 1);
+	p_node->d.ifexpr.p_false->cls->debug_print(p_node->d.ifexpr.p_false, p_f, depth + 1);
+}
+
 
 DEF_AST_CLS(AST_CLS_LITERAL_NULL,    NULL, debug_print_null);
 DEF_AST_CLS(AST_CLS_LITERAL_INT,     NULL, debug_print_int_like);
@@ -284,6 +296,7 @@ DEF_AST_CLS(AST_CLS_ACCESS,          NULL, debug_print_access);
 DEF_AST_CLS(AST_CLS_MAP,             NULL, debug_print_map);
 DEF_AST_CLS(AST_CLS_FORMAT,          NULL, debug_print_builtin);
 DEF_AST_CLS(AST_CLS_STACKREF,        NULL, debug_print_int_like);
+DEF_AST_CLS(AST_CLS_IF,              NULL, debug_print_ifexpr);
 
 
 DEF_AST_CLS(AST_CLS_LIST_GENERATOR,  NULL, debug_list_generator);
@@ -327,6 +340,7 @@ TOK_DECL(TOK_ACCESS,     -1, 0, NULL, -1, NULL); /* access */
 TOK_DECL(TOK_MAP,        -1, 0, NULL, -1, NULL); /* map */
 TOK_DECL(TOK_FORMAT,     -1, 0, NULL, -1, NULL); /* format */
 TOK_DECL(TOK_IDENTIFIER, -1, 0, NULL, -1, NULL); /* afasfasf - anything not a keyword */
+TOK_DECL(TOK_IF,         -1, 0, NULL, -1, NULL); /* if */
 
 /* Symbols */
 TOK_DECL(TOK_COMMA,      -1, 0, NULL, -1, NULL); /* , */
@@ -567,6 +581,7 @@ const struct token *tok_read(struct tokeniser *p_tokeniser, const struct ejson_e
 		} else if (!strcmp(p_temp->t.strident.str, "and")) { p_temp->cls = &TOK_LOGAND;
 		} else if (!strcmp(p_temp->t.strident.str, "or")) { p_temp->cls = &TOK_LOGOR;
 		} else if (!strcmp(p_temp->t.strident.str, "not")) { p_temp->cls = &TOK_LOGNOT;
+		} else if (!strcmp(p_temp->t.strident.str, "if")) { p_temp->cls = &TOK_IF;
 		} else { p_temp->cls = &TOK_IDENTIFIER; }
 
 	} else if (c == '!' && nc == '=') {
@@ -705,6 +720,14 @@ const struct ast_node *parse_primary(struct evaluation_context *p_workspace, str
 		if ((p_ret->d.map.p_function = expect_expression(p_workspace, p_tokeniser, 0, p_error_handler)) == NULL)
 			return NULL;
 		if ((p_ret->d.map.p_input_list = expect_expression(p_workspace, p_tokeniser, 0, p_error_handler)) == NULL)
+			return NULL;
+	} else if (p_token->cls == &TOK_IF) {
+		p_ret->cls = &AST_CLS_IF;
+		if ((p_ret->d.ifexpr.p_test = expect_expression(p_workspace, p_tokeniser, 0, p_error_handler)) == NULL)
+			return NULL;
+		if ((p_ret->d.ifexpr.p_true = expect_expression(p_workspace, p_tokeniser, 0, p_error_handler)) == NULL)
+			return NULL;
+		if ((p_ret->d.ifexpr.p_false = expect_expression(p_workspace, p_tokeniser, 0, p_error_handler)) == NULL)
 			return NULL;
 	} else if (p_token->cls == &TOK_INT) {
 		p_ret->cls        = &AST_CLS_LITERAL_INT;
@@ -1063,6 +1086,17 @@ static int evaluate_ast(struct ev_ast_node *p_dest, const struct ast_node *p_src
 		p_dest->pp_stack    = pp_stackx;
 		p_dest->p_node      = p_ret;
 		return 0;
+	}
+
+	if  (p_src->cls == &AST_CLS_IF) {
+		struct ev_ast_node test;
+		if (evaluate_ast(&test, p_src->d.ifexpr.p_test, pp_stackx, stack_sizex, p_alloc, p_error_handler))
+			return -1;
+		if (test.p_node->cls != &AST_CLS_LITERAL_BOOL)
+			return ejson_location_error(p_error_handler, &(p_src->d.ifexpr.p_test->doc_pos), "first argument to if must be a boolean\n");
+		if (test.p_node->d.i)
+			return evaluate_ast(p_dest, p_src->d.ifexpr.p_true, pp_stackx, stack_sizex, p_alloc, p_error_handler);
+		return evaluate_ast(p_dest, p_src->d.ifexpr.p_false, pp_stackx, stack_sizex, p_alloc, p_error_handler);
 	}
 
 	/* Convert lists into list generators - fixme: this should happen while building the ast. */
@@ -1794,7 +1828,7 @@ int parse_document(struct jnode *p_node, struct evaluation_context *p_workspace,
 		if ((p_token = tok_read(p_tokeniser, p_error_handler)) == NULL)
 			return 1;
 		if (p_token->cls != &TOK_IDENTIFIER)
-			return ejson_location_error(p_error_handler, &(p_token->posinfo), "expected an identifier\n");
+			return ejson_location_error(p_error_handler, &(p_token->posinfo), "expected an identifier, got a %s\n", p_token->cls->name);
 		cop_strh_init_shallow(&ident, p_token->t.strident.str);
 		if ((p_wsnode = cop_salloc(p_workspace->p_alloc, sizeof(struct ast_node) + ident.len + 1, 0)) == NULL)
 			return ejson_error(p_error_handler, "out of memory\n");

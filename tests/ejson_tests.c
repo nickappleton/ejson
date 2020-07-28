@@ -600,6 +600,26 @@ static int test_main(int argc, char *argv[]) {
 		,"use map to generate a list of dicts"
 		);
 
+	/* if tests */
+	tests++; errors += run_test
+		("if 1>2 \"yes\" \"no\""
+		,"\"no\""
+		,"test if with a greater than condition that is false"
+		);
+	tests++; errors += run_test
+		("if 6*3 == 18 \"yes\" \"no\""
+		,"\"yes\""
+		,"test if with a greater than condition that is false"
+		);
+	tests++; errors += run_test
+		("map func [x] if x>0 x 1 [0, 1, 2, 3]"
+		,"[1, 1, 2, 3]"
+		,"test if with a greater than condition that is false"
+		);
+
+
+
+
 	/* expected fail tests due to bad parsing syntax */
 
 	/* func error tests */
@@ -857,7 +877,18 @@ static int test_main(int argc, char *argv[]) {
 		,"empty document should result in a parse error"
 		);
 
+	/* test if with non-bool argument */
+	tests++; errors += run_test
+		("if 1 42 43"
+		,NULL
+		,"first argument to if must be a boolean"
+		);
 
+	tests++; errors += run_test
+		("call func [x] x [x]"
+		,NULL
+		,"x should not be in scope here"
+		);
 
 	fprintf((errors) ? stderr : stdout, "\n%d of %d tests passed\n", tests - errors, tests);
 
